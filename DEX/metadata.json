@@ -1,0 +1,5 @@
+{
+  "name": "DEX - Decentralized Energy Exchange",
+  "description": "A P2P marketplace for trading renewable energy represented by Multi-Purpose Tokens (MPTs). This MVP allows users to act as Prosumers (selling energy) or Consumers (buying energy) in a simulated, transparent environment.",
+  "requestFramePermissions": []
+}
