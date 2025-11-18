@@ -1,7 +1,5 @@
-
 import React, { useState, useMemo } from 'react';
 import type { useDEX } from '../hooks/useDEX';
-import type { SourceType } from '../shared/types';
 import Card from './shared/Card';
 
 interface TradeFormProps {
@@ -13,8 +11,7 @@ const TradeForm: React.FC<TradeFormProps> = ({ dex }) => {
   const isProsumer = currentUser.role === 'PROSUMER';
   const [amount, setAmount] = useState('');
   const [price, setPrice] = useState('');
-  const [sourceType, setSourceType] = useState<SourceType>('Solar_PV');
-
+  
   const total = useMemo(() => {
     const numAmount = parseFloat(amount);
     const numPrice = parseFloat(price);
@@ -29,7 +26,7 @@ const TradeForm: React.FC<TradeFormProps> = ({ dex }) => {
     const numAmount = parseFloat(amount);
     const numPrice = parseFloat(price);
     if (!isNaN(numAmount) && !isNaN(numPrice) && numAmount > 0 && numPrice > 0) {
-      createOrder(currentUser.id, isProsumer ? 'OFFER' : 'BID', numAmount, numPrice, sourceType);
+      createOrder(isProsumer ? 'OFFER' : 'BID', numAmount, numPrice);
       setAmount('');
       setPrice('');
     } else {
@@ -44,23 +41,8 @@ const TradeForm: React.FC<TradeFormProps> = ({ dex }) => {
           {isProsumer ? 'Create Sell Offer' : 'Create Buy Bid'}
         </h3>
         
-        {isProsumer && (
-          <div>
-            <label htmlFor="sourceType" className="block text-sm font-medium text-dex-gray-700">Energy Source</label>
-            <select
-              id="sourceType"
-              value={sourceType}
-              onChange={(e) => setSourceType(e.target.value as SourceType)}
-              className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-dex-gray-300 focus:outline-none focus:ring-dex-blue focus:border-dex-blue sm:text-sm rounded-md bg-dex-gray-50"
-            >
-              <option value="Solar_PV">Solar PV</option>
-              <option value="Wind_Farm">Wind Farm</option>
-            </select>
-          </div>
-        )}
-
         <div>
-          <label htmlFor="amount" className="block text-sm font-medium text-dex-gray-700">Amount (kWh)</label>
+          <label htmlFor="amount" className="block text-sm font-medium text-dex-gray-700">Amount (ET)</label>
           <div className="mt-1 relative rounded-md shadow-sm">
             <input
               type="number"
@@ -78,7 +60,7 @@ const TradeForm: React.FC<TradeFormProps> = ({ dex }) => {
         </div>
 
         <div>
-          <label htmlFor="price" className="block text-sm font-medium text-dex-gray-700">Price ($/kWh)</label>
+          <label htmlFor="price" className="block text-sm font-medium text-dex-gray-700">Price ($/ET)</label>
           <div className="mt-1 relative rounded-md shadow-sm">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
               <span className="text-dex-gray-500 sm:text-sm">$</span>
@@ -90,7 +72,7 @@ const TradeForm: React.FC<TradeFormProps> = ({ dex }) => {
               onChange={(e) => setPrice(e.target.value)}
               className="bg-dex-gray-50 text-dex-blue placeholder:text-dex-gray-600 focus:ring-dex-blue focus:border-dex-blue block w-full pl-7 pr-2 sm:text-sm border-dex-gray-300 rounded-md py-2"
               placeholder="0.00"
-              step="0.01"
+              step="0.0001"
             />
           </div>
         </div>

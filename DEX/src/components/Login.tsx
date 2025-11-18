@@ -1,27 +1,29 @@
-
 import React, { useState } from 'react';
 import Card from './shared/Card';
 import { LogoIcon, WalletIcon } from './IconComponents';
 
 interface LoginProps {
-  onLogin: (walletId: string) => boolean;
+  onLogin: (secret: string) => Promise<boolean>;
 }
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
-  const [walletId, setWalletId] = useState('');
+  const [secret, setSecret] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!walletId) {
-      setError('Please enter a wallet ID.');
+    if (!secret) {
+      setError('Please enter an account secret.');
       return;
     }
-    const success = onLogin(walletId);
+    setLoading(true);
+    const success = await onLogin(secret);
     if (!success) {
-      setError('Invalid wallet ID. Please try again.');
+      setError('Invalid account secret. Please try again.');
     }
+    setLoading(false);
   };
 
   return (
@@ -34,26 +36,26 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       <Card className="w-full max-w-md">
         <div className="text-center">
             <h2 className="text-2xl font-bold text-dex-gray-900">Connect your Wallet</h2>
-            <p className="mt-2 text-sm text-dex-gray-600">Enter your wallet ID to access the exchange.</p>
+            <p className="mt-2 text-sm text-dex-gray-600">Enter your XRPL account secret to access the exchange.</p>
         </div>
         <form onSubmit={handleLogin} className="mt-8 space-y-6">
           <div>
-            <label htmlFor="walletId" className="sr-only">
-              Wallet ID
+            <label htmlFor="secret" className="sr-only">
+              Account Secret
             </label>
             <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                     <WalletIcon className="h-5 w-5 text-dex-gray-400" />
                 </div>
                 <input
-                id="walletId"
-                name="walletId"
-                type="text"
-                value={walletId}
-                onChange={(e) => setWalletId(e.target.value)}
+                id="secret"
+                name="secret"
+                type="password"
+                value={secret}
+                onChange={(e) => setSecret(e.target.value)}
                 required
                 className="appearance-none rounded-md relative block w-full px-3 py-3 pl-10 border border-dex-gray-300 placeholder:text-dex-gray-600 text-dex-blue bg-dex-gray-50 focus:outline-none focus:ring-dex-blue focus:border-dex-blue sm:text-sm"
-                placeholder="Enter Wallet ID"
+                placeholder="Enter Account Secret (s...)"
                 />
             </div>
           </div>
@@ -63,18 +65,31 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           <div>
             <button
               type="submit"
-              className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-dex-blue hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-dex-blue"
+              disabled={loading}
+              className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-dex-blue hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-dex-blue disabled:bg-dex-gray-400"
             >
-              Connect Wallet
+              {loading ? 'Connecting...' : 'Connect Wallet'}
             </button>
           </div>
         </form>
-         <div className="mt-6 text-xs text-dex-gray-500 bg-dex-gray-100 p-3 rounded-md">
-            <p className="font-semibold mb-2">For demo purposes, use one of these IDs:</p>
-            <ul className="list-disc list-inside space-y-1">
-                <li><code className="font-mono bg-dex-gray-200 px-1.5 py-0.5 rounded">user-prosumer-01</code> (Seller)</li>
-                <li><code className="font-mono bg-dex-gray-200 px-1.5 py-0.5 rounded">user-consumer-01</code> (Buyer)</li>
-            </ul>
+         <div className="mt-6 text-xs text-dex-gray-500 bg-dex-gray-100 p-3 rounded-md space-y-3">
+            <div>
+                <p className="font-semibold mb-2">For demo purposes, use one of these Testnet secrets:</p>
+                <ul className="list-disc list-inside space-y-2 text-left">
+                    <li>
+                        <span className="font-bold">Prosumer (Seller):</span>
+                        <code className="block break-all font-mono bg-dex-gray-200 px-1.5 py-0.5 rounded mt-1">sEd7g2R93PS9Lz4M6jK74E1Jt3gDyjG</code>
+                    </li>
+                    <li>
+                        <span className="font-bold">Consumer (Buyer):</span>
+                         <code className="block break-all font-mono bg-dex-gray-200 px-1.5 py-0.5 rounded mt-1">sEdV1wL5sL2FqjK354t7fpmxTDFLgLo</code>
+                    </li>
+                </ul>
+            </div>
+             <div className="!mt-4 pt-3 border-t border-dex-gray-300 text-red-700 bg-red-50 p-2 rounded-md">
+                 <p className="font-bold">SECURITY WARNING:</p>
+                 <p>Handling secret keys in the browser is highly insecure and is done here for demonstration purposes only. Never expose your secret keys in a real application.</p>
+            </div>
         </div>
       </Card>
     </div>

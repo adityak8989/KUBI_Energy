@@ -30,19 +30,21 @@ const mockChartData = [
 ];
 
 const Dashboard: React.FC<DashboardProps> = ({ dex, setCurrentView }) => {
-  const { currentUser, wallets, simulateGeneration } = dex;
-  const wallet = wallets.find(w => w.userId === currentUser.id);
+  // FIX: Destructure `balances` instead of `wallets`. The `wallets` property no longer exists.
+  const { currentUser, balances, simulateGeneration } = dex;
   const [generationAmount, setGenerationAmount] = useState('10');
 
   const handleSimulateGeneration = (e: React.FormEvent) => {
     e.preventDefault();
     const amount = parseFloat(generationAmount);
     if (!isNaN(amount) && amount > 0) {
-      simulateGeneration(currentUser.id, amount);
+      // FIX: `simulateGeneration` now only takes the amount as an argument.
+      simulateGeneration(amount);
     }
   };
 
-  if (!wallet) return <div>Loading...</div>;
+  // FIX: The `balances` object is always present, so we don't need to check for a wallet.
+  // The `wallet` variable and its check were removed.
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -96,7 +98,8 @@ const Dashboard: React.FC<DashboardProps> = ({ dex, setCurrentView }) => {
                         <ET_Logo className="h-8 w-8"/>
                         <div>
                             <p className="text-sm text-dex-gray-600">Energy Token</p>
-                            <p className="text-xl font-bold text-dex-green">{wallet.etBalance.toFixed(2)} ET</p>
+                            {/* FIX: Use `balances.et` instead of `wallet.etBalance`. */}
+                            <p className="text-xl font-bold text-dex-green">{balances.et.toFixed(2)} ET</p>
                         </div>
                     </div>
                 </div>
@@ -105,7 +108,8 @@ const Dashboard: React.FC<DashboardProps> = ({ dex, setCurrentView }) => {
                         <USD_Logo className="h-8 w-8"/>
                         <div>
                             <p className="text-sm text-dex-gray-600">USD Balance</p>
-                            <p className="text-xl font-bold text-dex-blue">${wallet.usdBalance.toFixed(2)}</p>
+                            {/* FIX: Use `balances.usd` instead of `wallet.usdBalance`. */}
+                            <p className="text-xl font-bold text-dex-blue">${balances.usd.toFixed(2)}</p>
                         </div>
                     </div>
                 </div>

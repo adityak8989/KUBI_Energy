@@ -1,4 +1,3 @@
-
 import React from 'react';
 import type { useDEX } from '../hooks/useDEX';
 import TransactionHistory from './TransactionHistory';
@@ -10,11 +9,9 @@ interface WalletProps {
 }
 
 const Wallet: React.FC<WalletProps> = ({ dex }) => {
-  const { currentUser, wallets, transactions, users } = dex;
-  const wallet = wallets.find(w => w.userId === currentUser.id);
-  const userTransactions = transactions.filter(t => t.fromUserId === currentUser.id || t.toUserId === currentUser.id);
-
-  if (!wallet) return <div>Loading wallet...</div>;
+  const { currentUser, transactions, balances } = dex;
+  
+  if (!currentUser) return <div>Loading wallet...</div>;
 
   return (
     <div className="space-y-6">
@@ -26,7 +23,7 @@ const Wallet: React.FC<WalletProps> = ({ dex }) => {
                 </div>
                 <div>
                     <p className="text-sm font-medium text-dex-gray-500">Energy Token Balance</p>
-                    <p className="text-3xl font-bold text-dex-gray-800">{wallet.etBalance.toFixed(2)} ET</p>
+                    <p className="text-3xl font-bold text-dex-gray-800">{balances.et.toFixed(2)} ET</p>
                 </div>
             </div>
           </Card>
@@ -37,12 +34,12 @@ const Wallet: React.FC<WalletProps> = ({ dex }) => {
                 </div>
                 <div>
                     <p className="text-sm font-medium text-dex-gray-500">Stablecoin Balance</p>
-                    <p className="text-3xl font-bold text-dex-gray-800">${wallet.usdBalance.toFixed(2)}</p>
+                    <p className="text-3xl font-bold text-dex-gray-800">${balances.usd.toFixed(2)}</p>
                 </div>
             </div>
           </Card>
       </div>
-      <TransactionHistory transactions={userTransactions} currentUserId={currentUser.id} users={users} />
+      <TransactionHistory transactions={transactions} currentUserId={currentUser.id} />
     </div>
   );
 };

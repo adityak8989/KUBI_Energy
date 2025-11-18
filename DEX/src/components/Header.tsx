@@ -1,6 +1,7 @@
 
 import React from 'react';
-import type { User, Wallet } from '../shared/types';
+// FIX: Use Balances type instead of Wallet, which is no longer exported.
+import type { User, Balances } from '../shared/types';
 import { LogoIcon, DashboardIcon, MarketplaceIcon, WalletIcon } from './IconComponents';
 
 interface HeaderProps {
@@ -8,10 +9,12 @@ interface HeaderProps {
   setCurrentView: (view: 'dashboard' | 'marketplace' | 'wallet') => void;
   currentUser: User;
   onLogout: () => void;
-  wallet: Wallet;
+  // FIX: Prop renamed to `balances` and type changed to `Balances` to match the `useDEX` hook.
+  balances: Balances;
 }
 
-const Header: React.FC<HeaderProps> = ({ currentView, setCurrentView, currentUser, onLogout, wallet }) => {
+// FIX: Destructure `balances` prop instead of `wallet`.
+const Header: React.FC<HeaderProps> = ({ currentView, setCurrentView, currentUser, onLogout, balances }) => {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: DashboardIcon },
     { id: 'marketplace', label: 'Marketplace', icon: MarketplaceIcon },
@@ -51,8 +54,9 @@ const Header: React.FC<HeaderProps> = ({ currentView, setCurrentView, currentUse
                   <p className="text-xs text-dex-gray-500">{currentUser.role}</p>
               </div>
               <div className="text-right">
-                 <p className="text-sm font-semibold text-dex-green">{wallet.etBalance.toFixed(2)} ET</p>
-                 <p className="text-sm font-semibold text-dex-blue">${wallet.usdBalance.toFixed(2)}</p>
+                 {/* FIX: Use `balances.et` and `balances.usd` for consistency with the `useDEX` hook. */}
+                 <p className="text-sm font-semibold text-dex-green">{balances.et.toFixed(2)} ET</p>
+                 <p className="text-sm font-semibold text-dex-blue">${balances.usd.toFixed(2)}</p>
               </div>
             </div>
              <div className="border-l pl-4 border-dex-gray-200">

@@ -1,4 +1,3 @@
-
 import React from 'react';
 import type { useDEX } from '../hooks/useDEX';
 import OrderBook from './OrderBook';
@@ -9,20 +8,14 @@ interface MarketplaceProps {
 }
 
 const Marketplace: React.FC<MarketplaceProps> = ({ dex }) => {
-  const { orders, executeTrade, currentUser } = dex;
+  const { marketOrders, executeTrade, orders, currentUser } = dex;
   const isProsumer = currentUser.role === 'PROSUMER';
 
-  // All open offers from others, sorted by lowest price
-  const sellOffers = orders.filter(o => o.type === 'OFFER' && o.userId !== currentUser.id).sort((a, b) => a.price - b.price);
-  
-  // All open bids from others, sorted by highest price
-  const buyBids = orders.filter(o => o.type === 'BID' && o.userId !== currentUser.id).sort((a, b) => b.price - a.price);
-
   // Current user's open offers
-  const mySellOffers = orders.filter(o => o.type === 'OFFER' && o.userId === currentUser.id).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  const mySellOffers = orders.filter(o => o.direction === 'sell').sort((a, b) => new Date(b.created || 0).getTime() - new Date(a.created || 0).getTime());
 
   // Current user's open bids
-  const myBuyBids = orders.filter(o => o.type === 'BID' && o.userId === currentUser.id).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  const myBuyBids = orders.filter(o => o.direction === 'buy').sort((a, b) => new Date(b.created || 0).getTime() - new Date(a.created || 0).getTime());
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -31,9 +24,9 @@ const Marketplace: React.FC<MarketplaceProps> = ({ dex }) => {
           <>
             <OrderBook
               title="Market Buy Bids (Sell to these)"
-              orders={buyBids}
+              orders={marketOrders.bids}
               type="BID"
-              onExecute={(order) => executeTrade(order.userId, currentUser.id, order)}
+              onExecute={executeTrade}
               currentUserId={currentUser.id}
             />
             <OrderBook
@@ -49,9 +42,9 @@ const Marketplace: React.FC<MarketplaceProps> = ({ dex }) => {
           <>
             <OrderBook
               title="Market Sell Offers (Buy from these)"
-              orders={sellOffers}
+              orders={marketOrders.offers}
               type="OFFER"
-              onExecute={(order) => executeTrade(currentUser.id, order.userId, order)}
+              onExecute={executeTrade}
               currentUserId={currentUser.id}
             />
             <OrderBook

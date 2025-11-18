@@ -1,47 +1,25 @@
+import type * as xrpl from 'xrpl';
 
 export type UserRole = 'PROSUMER' | 'CONSUMER';
 
 export interface User {
-  id: string;
+  id: string; // XRPL Address
   name: string;
   role: UserRole;
   kycVerified: boolean;
+  secret: string; // WARNING: For demo purposes only. NEVER store secrets like this in a real app.
 }
 
-export interface Wallet {
-  userId: string;
-  etBalance: number;
-  usdBalance: number;
+export interface Balances {
+    et: number;
+    usd: number;
 }
 
-export type SourceType = 'Solar_PV' | 'Wind_Farm';
+// Using parsed format from xrpl.js for convenience
+export type Order = xrpl.Offer & { id: string };
 
-export interface MPTMetadata {
-  sourceType: SourceType;
-  generationTime: string;
-  certificateId: string;
-  geoLocation: string;
-}
-
-export type OrderType = 'BID' | 'OFFER';
-
-export interface Order {
-  id: string;
-  userId: string;
-  type: OrderType;
-  amount: number;
-  price: number;
-  metadata: MPTMetadata;
-  timestamp: string;
-}
-
-export interface Transaction {
-  id: string;
-  fromUserId: string;
-  toUserId: string;
-  amount: number;
-  price: number;
-  total: number;
-  timestamp: string;
-  orderId: string;
-}
+// Using the base Transaction type from xrpl.js and extending it
+export type Transaction = xrpl.Transaction & {
+    hash: string;
+    date: number;
+};
