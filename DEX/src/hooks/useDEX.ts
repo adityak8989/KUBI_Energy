@@ -8,14 +8,14 @@ const RIPPLE_TESTNET_SERVER = 'wss://s.altnet.rippletest.net:51233';
 
 // Central authority for issuing Energy Tokens (ET)
 const ISSUER_WALLET = {
-    address: 'rB55t1UnmS53fYLA3y24p8w1P1gMNksTfW',
-    secret: 'sEd798BhoTzYPf4d31wgg9sifYyGv8Q',
+    address: 'r416gWnjV4qmivUQ3bx8fJPjW6323XsANP',
+    secret: 'sEdVq6J2vqRXGXiuqU2C4RxbF9VE2c3',
 };
 
 // Simulated financial institution for issuing USD
 const GATEWAY_WALLET = {
-    address: 'rEqg52Qno8qgJ31CQJ2YfC2E2x2pSAnp1N',
-    secret: 'sEdT9Cqf1pUkn2EcN15Fv1EwS3Kz8j6',
+    address: 'rERaR8C21WgZPW2yAp8WXGxviXUJJm76DA',
+    secret: 'sEdTfrLyb3fN4f2bBQBbTgQ8mZtHnYM',
 };
 
 // --- Currency Codes ---
@@ -25,19 +25,19 @@ const USD_CURRENCY_CODE = 'USD';
 // --- Pre-configured user accounts ---
 // In a real app, users would generate their own wallets.
 const prosumerUser: User = {
-    id: 'rpg2qF53pB2r3qW8xNqR9J4v85S1S1JmR7',
+    id: 'rDfNEueAZPPLhaC6HXjvTAmM9JzeEV5NrR',
     name: 'Solar Farm Alpha (Prosumer)',
     role: 'PROSUMER',
     kycVerified: true,
-    secret: 'sEd7g2R93PS9Lz4M6jK74E1Jt3gDyjG'
+    secret: 'sEd7e6gBkktLFwPdJJ5qMrNTNyaGG6s'
 };
 
 const consumerUser: User = {
-    id: 'rHptm1kAxYffy1gnsjS2d5v4x6doK42f88',
+    id: 'r3U1baLKb8PRnaELDvZMMWKtTWTBTpPB7w',
     name: 'Eco Conscious Home (Consumer)',
     role: 'CONSUMER',
     kycVerified: true,
-    secret: 'sEdV1wL5sL2FqjK354t7fpmxTDFLgLo'
+    secret: 'sEdV2dPUx6xs5wDCag6tXavWWMdqAQX'
 };
 
 const initialUsers = [prosumerUser, consumerUser];
