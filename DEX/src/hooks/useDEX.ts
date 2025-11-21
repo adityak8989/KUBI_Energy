@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { User, Order, Transaction, Balances } from '../shared/types';
+import { User, Order, Transaction, Balances, MPTMetadata } from '../shared/types';
 import * as xrpl from 'xrpl';
 
 // --- XRPL Testnet Configuration ---
@@ -22,22 +22,21 @@ const GATEWAY_WALLET = {
 const ET_CURRENCY_CODE = 'ETK'; // Energy Token
 const USD_CURRENCY_CODE = 'USD';
 
-// --- Pre-configured user accounts ---
 // In a real app, users would generate their own wallets.
 const prosumerUser: User = {
-    id: 'rDfNEueAZPPLhaC6HXjvTAmM9JzeEV5NrR',
+    id: 'rDfNEueAZPPLhaC6HXjvTAmM9JzeEV5NrR', // XRPL Address
     name: 'Solar Farm Alpha (Prosumer)',
     role: 'PROSUMER',
     kycVerified: true,
-    secret: 'sEd7e6gBkktLFwPdJJ5qMrNTNyaGG6s'
+    secret: 'sEd7e6gBkktLFwPdJJ5qMrNTNyaGG6s' // use for login, for demo purposes only
 };
 
 const consumerUser: User = {
-    id: 'r3U1baLKb8PRnaELDvZMMWKtTWTBTpPB7w',
+    id: 'r3U1baLKb8PRnaELDvZMMWKtTWTBTpPB7w', // XRPL Address
     name: 'Eco Conscious Home (Consumer)',
     role: 'CONSUMER',
     kycVerified: true,
-    secret: 'sEdV2dPUx6xs5wDCag6tXavWWMdqAQX'
+    secret: 'sEdV2dPUx6xs5wDCag6tXavWWMdqAQX' // use for login, for demo purposes only
 };
 
 const initialUsers = [prosumerUser, consumerUser];
@@ -48,8 +47,25 @@ export const useDEX = () => {
     const [balances, setBalances] = useState<Balances>({ et: 0, usd: 0 });
     const [orders, setOrders] = useState<Order[]>([]);
     const [transactions, setTransactions] = useState<Transaction[]>([]);
+    const [mpts, setMpts] = useState<Array<{ hash: string; amount: number; metadata: MPTMetadata }>>([]);
     const [marketOrders, setMarketOrders] = useState<{bids: Order[], offers: Order[]}>({ bids: [], offers: [] });
     const [isLoading, setIsLoading] = useState<boolean>(false);
+
+    // Helpers for hex <-> string conversion used for NFT URIs
+    const stringToHex = (str: string) => {
+        const encoder = new TextEncoder();
+        const bytes = encoder.encode(str);
+        return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    };
+    const hexToString = (hex: string) => {
+        try {
+            const cleaned = String(hex).replace(/^0x/, '');
+            const bytes = new Uint8Array(cleaned.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
+            return new TextDecoder().decode(bytes);
+        } catch (e) {
+            return '';
+        }
+    };
 
     const disconnectClient = useCallback(async () => {
         if (client.isConnected()) {
@@ -84,8 +100,34 @@ export const useDEX = () => {
         setOrders(userOrders);
 
         // Fetch Transaction History
-        const accountTx = await client.request({ command: 'account_tx', account: walletAddress, limit: 20 });
-        setTransactions(accountTx.result.transactions.map(tx => tx.tx as any));
+        const accountTx = await client.request({ command: 'account_tx', account: walletAddress, limit: 50 });
+        const txEntries = accountTx.result.transactions || [];
+        // map to tx objects (keep hash on the tx object)
+        const txs = txEntries.map((t: any) => ({ ...(t.tx as any), hash: (t.tx && t.tx.hash) || t.hash }));
+        setTransactions(txs);
+
+        // Parse MPT metadata from NFTs owned by the account using `account_nfts`.
+        // NFTs store metadata in the `URI` field as hex-encoded UTF-8. We attempt to parse JSON there.
+        try {
+            const accountNfts = await client.request({ command: 'account_nfts', account: walletAddress, limit: 200 });
+            const nftList = accountNfts.result.account_nfts || [];
+            const detectedNfts: Array<{ hash: string; amount: number; metadata: MPTMetadata }> = [];
+            for (const nft of nftList) {
+                const n: any = nft;
+                const uriHex = n.URI || n.uri || n.Uri || '';
+                if (!uriHex) continue;
+                const uriStr = hexToString(uriHex);
+                try {
+                    const parsed = JSON.parse(uriStr) as MPTMetadata;
+                    detectedNfts.push({ hash: n.NFTokenID || n.nft_id || n.nftid || '', amount: 0, metadata: parsed });
+                } catch (e) {
+                    // ignore URIs that are not JSON
+                }
+            }
+            setMpts(detectedNfts);
+        } catch (e) {
+            // ignore errors querying NFTs
+        }
         
         // Fetch Market Order Book
         const etGet = { currency: ET_CURRENCY_CODE, issuer: ISSUER_WALLET.address };
@@ -197,32 +239,157 @@ export const useDEX = () => {
         }
     }, [currentUser, refreshData]);
 
-    const simulateGeneration = useCallback(async (amount: number) => {
+    const simulateGeneration = useCallback(async (amount: number, metadata?: MPTMetadata) => {
+        // NFT-based MPT minting: mint an NFToken with metadata and transfer to recipient
         if (!currentUser || currentUser.role !== 'PROSUMER') return;
-        
+
         const issuerWallet = xrpl.Wallet.fromSeed(ISSUER_WALLET.secret);
         if (!client.isConnected()) await client.connect();
 
-        const transaction: xrpl.Payment = {
-            TransactionType: "Payment",
-            Account: issuerWallet.address,
-            Destination: currentUser.id,
-            Amount: {
-                currency: ET_CURRENCY_CODE,
-                issuer: ISSUER_WALLET.address,
-                value: amount.toString(),
-            },
-        };
-
         try {
-            const prepared = await client.autofill(transaction);
-            const signed = issuerWallet.sign(prepared);
-            await client.submitAndWait(signed.tx_blob);
-            alert(`${amount} ET minted successfully! Refreshing data...`);
+            // 1) Mint NFToken on issuer with URI containing metadata JSON (hex-encoded)
+            const mintTx: any = { TransactionType: 'NFTokenMint', Account: issuerWallet.address, NFTokenTaxon: 0 };
+            if (metadata) mintTx.URI = stringToHex(JSON.stringify(metadata));
+
+            let preparedMint: any = await client.autofill(mintTx);
+            // extend LastLedgerSequence to avoid quick-expiry during multi-step flows
+            try { preparedMint.LastLedgerSequence = (preparedMint.LastLedgerSequence || 0) + 100; } catch (e) {}
+            const signedMint = issuerWallet.sign(preparedMint);
+            const mintRes = await client.submitAndWait(signedMint.tx_blob);
+            console.debug('NFTokenMint result', mintRes?.result || mintRes);
+
+            // Attempt direct-mint-to-recipient fallbacks (some rippled builds support extra fields)
+            const tryDirectMint = async () => {
+                const directVariants: any[] = [
+                    // common vendor extension: Destination field on NFTokenMint
+                    { ...mintTx, Destination: currentUser.id },
+                    // vendor extension: Owner field set to recipient
+                    { ...mintTx, Owner: currentUser.id }
+                ];
+
+                for (const variant of directVariants) {
+                    try {
+                        let prepared: any = await client.autofill(variant);
+                        try { prepared.LastLedgerSequence = (prepared.LastLedgerSequence || 0) + 100; } catch (e) {}
+                        const signed = issuerWallet.sign(prepared);
+                        const res = await client.submitAndWait(signed.tx_blob);
+                        // treat any tes* result as success
+                        if (res && typeof res === 'object' && String((res as any).result?.engine_result || (res as any).engine_result || '').startsWith('tes')) {
+                            console.debug('Direct NFTokenMint variant succeeded', variant, res);
+                            return res;
+                        } else {
+                            console.debug('Direct NFTokenMint variant engine result', variant, res?.result || res);
+                        }
+                    } catch (e) {
+                        console.debug('Direct NFTokenMint variant failed', variant, e?.message || e);
+                        // try next variant
+                    }
+                }
+                return null;
+            };
+
+            const directRes = await tryDirectMint();
+            if (directRes) {
+                // minted directly to recipient; refresh and return
+                await refreshData(currentUser.id);
+                return { mintRes, directRes };
+            }
+
+            // 2) Wait briefly then locate the newly minted NFT on the issuer account
+            await new Promise(r => setTimeout(r, 1000));
+            const issuerNftsRes = await client.request({ command: 'account_nfts', account: issuerWallet.address, limit: 200 });
+            const nftList = issuerNftsRes.result.account_nfts || [];
+            let newNft: any = null;
+            if (metadata) {
+                const targetHex = stringToHex(JSON.stringify(metadata)).replace(/^0x/, '');
+                for (const n of nftList) {
+                    const nAny: any = n;
+                    const u = (nAny.URI || '').replace(/^0x/, '');
+                    if (u && u === targetHex) { newNft = nAny; break; }
+                }
+            }
+            if (!newNft) newNft = nftList[nftList.length - 1];
+
+            if (!newNft) {
+                console.warn('Could not locate minted NFT; aborting transfer.');
+                alert('Minted NFT but failed to locate it for transfer.');
+                await refreshData(currentUser.id);
+                return mintRes;
+            }
+
+            const nfId = newNft.NFTokenID || (newNft as any).nft_id || '';
+
+            // 3) Create a BUY offer from the recipient (Account = recipient, Owner = issuer)
+            //    Then have the issuer accept that buy offer. This avoids Owner/Account equality errors.
+            const recipientWallet = xrpl.Wallet.fromSeed(currentUser.secret);
+            // buy offers must have Amount > 0 (drops). Use 1 drop for a free-ish transfer.
+            const buyOfferTx: any = {
+                TransactionType: 'NFTokenCreateOffer',
+                Account: recipientWallet.address,
+                Owner: issuerWallet.address,
+                NFTokenID: nfId,
+                Amount: '1'
+            };
+            let preparedBuyOffer: any = await client.autofill(buyOfferTx);
+            try { preparedBuyOffer.LastLedgerSequence = (preparedBuyOffer.LastLedgerSequence || 0) + 100; } catch (e) {}
+            const signedBuyOffer = recipientWallet.sign(preparedBuyOffer);
+            const buyOfferRes = await client.submitAndWait(signedBuyOffer.tx_blob);
+            console.debug('NFTokenCreateOffer (buy) result', buyOfferRes?.result || buyOfferRes);
+
+            // Wait then locate the buy offer index so the issuer can accept it
+            await new Promise(r => setTimeout(r, 1000));
+            let buyOfferIndex: string | undefined = undefined;
+            try {
+                const buyOffersRes = await client.request({ command: 'nft_buy_offers', nft_id: nfId });
+                const buyOffers = buyOffersRes.result.offers || [];
+                for (const o of buyOffers) {
+                    const oAny: any = o;
+                    const owner = oAny.owner || oAny.Account || oAny.account;
+                    // buy offers will have owner = recipient
+                    if (owner === recipientWallet.address) {
+                        buyOfferIndex = oAny.nft_offer_index || oAny.index || oAny.offer_index || oAny.nft_offer_id || oAny.offerId || oAny.offer_index;
+                        break;
+                    }
+                }
+            } catch (e) {
+                // fallback: try nft_sell_offers and search for a matching offer
+                try {
+                    const sellOffersRes = await client.request({ command: 'nft_sell_offers', nft_id: nfId });
+                    const offers = sellOffersRes.result.offers || [];
+                    for (const o of offers) {
+                        const oAny: any = o;
+                        const owner = oAny.owner || oAny.Account || oAny.seller;
+                        if (owner === recipientWallet.address) {
+                            buyOfferIndex = oAny.nft_offer_index || oAny.index || oAny.offer_index || oAny.nft_offer_id || oAny.offerId;
+                            break;
+                        }
+                    }
+                } catch (ee) {
+                    // ignore
+                }
+            }
+
+            if (!buyOfferIndex) {
+                console.warn('Could not locate buy offer index to accept. Returning after mint.');
+                await refreshData(currentUser.id);
+                return { mintRes, buyOfferRes };
+            }
+
+            // 4) Issuer accepts the buy offer to transfer NFT
+            const acceptTx: any = { TransactionType: 'NFTokenAcceptOffer', Account: issuerWallet.address, NFTokenBuyOffer: buyOfferIndex };
+            let preparedAccept: any = await client.autofill(acceptTx);
+            try { preparedAccept.LastLedgerSequence = (preparedAccept.LastLedgerSequence || 0) + 100; } catch (e) {}
+            const signedAccept = issuerWallet.sign(preparedAccept);
+            const acceptRes = await client.submitAndWait(signedAccept.tx_blob);
+            console.debug('NFTokenAcceptOffer result', acceptRes?.result || acceptRes);
+
+            alert(`${amount} ET minted as NFT and transferred successfully! Refreshing data...`);
             await refreshData(currentUser.id);
+            return { mintRes, buyOfferRes, acceptRes };
         } catch (error) {
-            console.error('Minting failed:', error);
-            alert(`Error minting tokens: ${error.message}`);
+            console.error('NFT minting/transfer failed:', error);
+            alert(`Error minting NFT MPT: ${error.message || error}`);
+            throw error;
         }
     }, [currentUser, refreshData]);
     
@@ -241,6 +408,7 @@ export const useDEX = () => {
         balances,
         orders,
         transactions,
+        mpts,
         marketOrders,
         createOrder,
         executeTrade,
