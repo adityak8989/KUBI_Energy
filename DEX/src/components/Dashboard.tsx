@@ -38,7 +38,6 @@ const Dashboard: React.FC<DashboardProps> = ({ dex, setCurrentView }) => {
     e.preventDefault();
     const amount = parseFloat(generationAmount);
     if (!isNaN(amount) && amount > 0) {
-      // FIX: `simulateGeneration` now only takes the amount as an argument.
       simulateGeneration(amount);
     }
   };
