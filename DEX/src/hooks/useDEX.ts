@@ -67,6 +67,23 @@ export const useDEX = () => {
         }
     };
 
+    // Normalize various error shapes from xrpl.js / rippled RPC responses into a readable string
+    const extractErrorMessage = (err: any) => {
+        if (!err) return 'Unknown error';
+        // If the error is already an Error instance, prefer its message
+        if (err instanceof Error) return err.message;
+        // xrpl.js sometimes returns an object with a `result` containing engine fields
+        const maybe = err.result || err;
+        const engineMsg = maybe?.engine_result_message || maybe?.engine_result || maybe?.message;
+        if (engineMsg) return String(engineMsg);
+        // Some errors are raw RPC request/response objects — stringify safely
+        try {
+            return JSON.stringify(err);
+        } catch (e) {
+            return String(err);
+        }
+    };
+
     const disconnectClient = useCallback(async () => {
         if (client.isConnected()) {
             await client.disconnect();
@@ -201,14 +218,19 @@ export const useDEX = () => {
         };
         
         try {
-            const prepared = await client.autofill(transaction);
+            let prepared: any = await client.autofill(transaction);
+            try { prepared.LastLedgerSequence = (prepared.LastLedgerSequence || 0) + 500; } catch (e) {}
             const signed = userWallet.sign(prepared);
-            await client.submitAndWait(signed.tx_blob);
+            const res = await client.submitAndWait(signed.tx_blob);
+            console.debug('OfferCreate result', res?.result || res);
             alert(`${type} created successfully! Refreshing data...`);
             await refreshData(currentUser.id);
         } catch (error) {
             console.error('Order creation failed:', error);
-            alert(`Error creating order: ${error.message}`);
+            // surface engine_result if present
+            const maybe = (error as any)?.result || (error as any);
+            const msg = maybe?.engine_result_message || maybe?.message || String(error);
+            alert(`Error creating order: ${msg}`);
         }
     }, [currentUser, refreshData]);
 
@@ -228,14 +250,18 @@ export const useDEX = () => {
         };
         
         try {
-            const prepared = await client.autofill(transaction);
+            let prepared: any = await client.autofill(transaction);
+            try { prepared.LastLedgerSequence = (prepared.LastLedgerSequence || 0) + 100; } catch (e) {}
             const signed = userWallet.sign(prepared);
-            await client.submitAndWait(signed.tx_blob);
+            const res = await client.submitAndWait(signed.tx_blob);
+            console.debug('Trade OfferCreate result', res?.result || res);
             alert(`Trade executed successfully! Refreshing data...`);
             await refreshData(currentUser.id);
         } catch (error) {
             console.error('Trade execution failed:', error);
-            alert(`Error executing trade: ${error.message}`);
+            const maybe = (error as any)?.result || (error as any);
+            const msg = maybe?.engine_result_message || maybe?.message || String(error);
+            alert(`Error executing trade: ${msg}`);
         }
     }, [currentUser, refreshData]);
 
@@ -248,7 +274,13 @@ export const useDEX = () => {
 
         try {
             // 1) Mint NFToken on issuer with URI containing metadata JSON (hex-encoded)
-            const mintTx: any = { TransactionType: 'NFTokenMint', Account: issuerWallet.address, NFTokenTaxon: 0 };
+        const mintTx: any = { 
+            TransactionType: 'NFTokenMint', 
+            Account: issuerWallet.address, 
+            NFTokenTaxon: 0,
+            Flags: 0x00000008  // tfTransferable flag
+            };
+
             if (metadata) mintTx.URI = stringToHex(JSON.stringify(metadata));
 
             let preparedMint: any = await client.autofill(mintTx);
@@ -315,6 +347,30 @@ export const useDEX = () => {
                 alert('Minted NFT but failed to locate it for transfer.');
                 await refreshData(currentUser.id);
                 return mintRes;
+            }
+
+            // Helper: attempt to detect non-transferable NFTs via common fields
+            const nftLooksNonTransferable = (n: any) => {
+                if (!n) return false;
+                // explicit transferability flags that implementations might expose
+                const explicitFalse = [n.Transferable, n.transferable, n.is_transferable, n.isTransferable];
+                for (const v of explicitFalse) {
+                    if (v === false) return true;
+                }
+                // Some nodes expose a human-readable 'Flags' numeric bitmask.
+                // We can't rely on exact bit values across versions here, but
+                // a Flags value of 0 means no special restrictions; any other
+                // value is ambiguous — don't assume non-transferable.
+                if (typeof n.Flags === 'number' && n.Flags === 0) return false;
+                // If Flags exists but no explicit transferable info, leave as unknown (treat as transferable)
+                return false;
+            };
+
+            if (nftLooksNonTransferable(newNft)) {
+                console.warn('Detected NFT that appears non-transferable. Aborting transfer.', newNft);
+                alert('Minted NFT appears to be non-transferable on this ledger. Transfer aborted.');
+                await refreshData(currentUser.id);
+                return { mintRes, note: 'nft_non_transferable_detected' };
             }
 
             const nfId = newNft.NFTokenID || (newNft as any).nft_id || '';
@@ -388,8 +444,10 @@ export const useDEX = () => {
             return { mintRes, buyOfferRes, acceptRes };
         } catch (error) {
             console.error('NFT minting/transfer failed:', error);
-            alert(`Error minting NFT MPT: ${error.message || error}`);
-            throw error;
+            const msg = extractErrorMessage(error);
+            alert(`Error minting NFT MPT: ${msg}`);
+            // return structured error so caller/UI can handle without crashing
+            return { error: msg };
         }
     }, [currentUser, refreshData]);
     
