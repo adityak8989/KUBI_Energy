@@ -52,6 +52,9 @@ const App: React.FC = () => {
         onLogout={logout}
         // FIX: Pass the `balances` object directly to the Header component instead of the deprecated `wallet` prop.
         balances={dex.balances}
+        mptCount={dex.mpts?.length || 0}
+        isConnected={dex.isConnected}
+        onReconnect={dex.reconnect}
       />
       <main className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto">
         {renderView()}

@@ -42,13 +42,41 @@ const consumerUser: User = {
 const initialUsers = [prosumerUser, consumerUser];
 const client = new xrpl.Client(RIPPLE_TESTNET_SERVER);
 
+// Ensure the xrpl client is connected; retry a few times if needed
+const ensureConnected = async (attempts = 3, delayMs = 800) => {
+    for (let i = 0; i < attempts; i++) {
+        try {
+            if (!client.isConnected()) {
+                await client.connect();
+            }
+            // sanity check: ping or simple request could be used, but isConnected is sufficient here
+            if (client.isConnected()) return true;
+        } catch (e) {
+            // wait and retry
+            await new Promise(r => setTimeout(r, delayMs));
+        }
+    }
+    return false;
+};
+
 export const useDEX = () => {
     const [currentUser, setCurrentUser] = useState<User | null>(null);
+    const [isConnected, setIsConnected] = useState<boolean>(false);
     const [balances, setBalances] = useState<Balances>({ et: 0, usd: 0 });
     const [orders, setOrders] = useState<Order[]>([]);
     const [transactions, setTransactions] = useState<Transaction[]>([]);
-    const [mpts, setMpts] = useState<Array<{ hash: string; amount: number; metadata: MPTMetadata }>>([]);
+    // Enhanced MPT tracking: now includes nftId, flags, and full ledger state
+    const [mpts, setMpts] = useState<Array<{ 
+        hash: string; 
+        nftId: string;
+        amount: number; 
+        metadata: MPTMetadata;
+        flags?: number;
+        transferable?: boolean;
+        accepted?: boolean;
+    }>>([]);
     const [marketOrders, setMarketOrders] = useState<{bids: Order[], offers: Order[]}>({ bids: [], offers: [] });
+    const [marketplaceNFTOffers, setMarketplaceNFTOffers] = useState<Array<any>>([]);
     const [isLoading, setIsLoading] = useState<boolean>(false);
 
     // Helpers for hex <-> string conversion used for NFT URIs
@@ -65,6 +93,17 @@ export const useDEX = () => {
         } catch (e) {
             return '';
         }
+    };
+
+    // Simple USD -> XRP drops conversion helper.
+    // WARNING: This uses a configurable exchange rate. Update `USD_PER_XRP` to match current market.
+    // USD_PER_XRP = how many USD correspond to 1 XRP (e.g., 0.5 means 1 XRP = $0.50)
+    const USD_PER_XRP = 0.5; // default placeholder — replace with live fetch if desired
+    const usdToDrops = (usdAmount: number) => {
+        if (!usdAmount || typeof usdAmount !== 'number' || !isFinite(usdAmount)) return '1';
+        const xrp = usdAmount / USD_PER_XRP; // how many XRP
+        const drops = Math.max(1, Math.round(xrp * 1_000_000));
+        return String(drops);
     };
 
     // Normalize various error shapes from xrpl.js / rippled RPC responses into a readable string
@@ -84,14 +123,85 @@ export const useDEX = () => {
         }
     };
 
+    // Polling helpers: wait for NFTs or offers to appear on-ledger
+    const ensureConnectedWrapped = useCallback(async () => {
+        const ok = await ensureConnected();
+        try { setIsConnected(!!ok); } catch (e) {}
+        return ok;
+    }, []);
+    const waitForNftByUriHex = async (targetHex: string, account: string, timeoutMs = 20000, intervalMs = 1000) => {
+        const end = Date.now() + timeoutMs;
+        const cleanedTarget = String(targetHex).replace(/^0x/, '');
+        while (Date.now() < end) {
+            try {
+                await ensureConnectedWrapped();
+                const res = await client.request({ command: 'account_nfts', account, limit: 200 });
+                const list = (res as any).result?.account_nfts || [];
+                for (const n of list) {
+                    const nAny: any = n;
+                    const u = (nAny.URI || nAny.uri || '').replace(/^0x/, '');
+                    if (u && u === cleanedTarget) return nAny;
+                }
+            } catch (e) {
+                // ignore and retry
+            }
+            await new Promise(r => setTimeout(r, intervalMs));
+        }
+        return null;
+    };
+
+    const waitForOffer = async (nftId: string, ownerAddr?: string, type: 'buy' | 'sell' = 'sell', timeoutMs = 20000, intervalMs = 1000) => {
+        const end = Date.now() + timeoutMs;
+        const cmd = type === 'buy' ? 'nft_buy_offers' : 'nft_sell_offers';
+        while (Date.now() < end) {
+            try {
+                await ensureConnectedWrapped();
+                const res = await client.request({ command: cmd, nft_id: nftId });
+                const offers = (res as any).result?.offers || [];
+                for (const o of offers) {
+                    const oAny: any = o;
+                    const owner = oAny.owner || oAny.Account || oAny.account || oAny.seller;
+                    if (!ownerAddr || owner === ownerAddr) {
+                        const idx = oAny.nft_offer_index || oAny.index || oAny.offer_index || oAny.nft_offer_id || oAny.offerId;
+                        return { ...oAny, index: idx };
+                    }
+                }
+            } catch (e) {
+                // ignore per-try errors
+            }
+            await new Promise(r => setTimeout(r, intervalMs));
+        }
+        return null;
+    };
+
+    // Wait for the account's NFT count to increase; return the newly added NFT (last one)
+    const waitForNewNftOnAccount = async (account: string, previousCount: number, timeoutMs = 20000, intervalMs = 1000) => {
+        const end = Date.now() + timeoutMs;
+        while (Date.now() < end) {
+            try {
+                await ensureConnectedWrapped();
+                const res = await client.request({ command: 'account_nfts', account, limit: 200 });
+                const list = (res as any).result?.account_nfts || [];
+                if (list.length > previousCount) {
+                    return list[list.length - 1];
+                }
+            } catch (e) {
+                // ignore
+            }
+            await new Promise(r => setTimeout(r, intervalMs));
+        }
+        return null;
+    };
+
     const disconnectClient = useCallback(async () => {
         if (client.isConnected()) {
             await client.disconnect();
+            try { setIsConnected(false); } catch (e) {}
         }
     }, []);
 
     const refreshData = useCallback(async (walletAddress: string) => {
-        if (!client.isConnected()) await client.connect();
+        await ensureConnectedWrapped();
 
         // Fetch Balances
         const accountLines = await client.request({ command: 'account_lines', account: walletAddress });
@@ -128,18 +238,41 @@ export const useDEX = () => {
         try {
             const accountNfts = await client.request({ command: 'account_nfts', account: walletAddress, limit: 200 });
             const nftList = accountNfts.result.account_nfts || [];
-            const detectedNfts: Array<{ hash: string; amount: number; metadata: MPTMetadata }> = [];
+            const detectedNfts: Array<{ hash: string; nftId: string; amount: number; metadata: MPTMetadata; flags?: number; transferable?: boolean; accepted?: boolean }> = [];
             for (const nft of nftList) {
                 const n: any = nft;
+                const nftId = n.NFTokenID || n.nft_id || n.nftid || '';
                 const uriHex = n.URI || n.uri || n.Uri || '';
-                if (!uriHex) continue;
-                const uriStr = hexToString(uriHex);
+                if (!nftId) continue;
+                
+                const uriStr = uriHex ? hexToString(uriHex) : '';
+                let metadata: MPTMetadata | null = null;
                 try {
-                    const parsed = JSON.parse(uriStr) as MPTMetadata;
-                    detectedNfts.push({ hash: n.NFTokenID || n.nft_id || n.nftid || '', amount: 0, metadata: parsed });
+                    if (uriStr) {
+                        metadata = JSON.parse(uriStr) as MPTMetadata;
+                    }
                 } catch (e) {
                     // ignore URIs that are not JSON
                 }
+                
+                // Determine if NFT is transferable based on flags
+                const flags = n.Flags || 0;
+                const transferable = !n.Transferable || n.Transferable !== false;
+                
+                detectedNfts.push({ 
+                    hash: nftId, 
+                    nftId,
+                    amount: 1, 
+                    metadata: metadata || {
+                        sourceType: 'Solar_PV' as const,
+                        generationTime: new Date().toISOString(),
+                        certificateId: nftId,
+                        geoLocation: 'Unknown'
+                    },
+                    flags,
+                    transferable,
+                    accepted: true
+                });
             }
             setMpts(detectedNfts);
         } catch (e) {
@@ -159,18 +292,105 @@ export const useDEX = () => {
         });
     }, []);
 
+    // Discover NFT sell offers across known accounts (issuer + demo users)
+    const refreshMarketplaceNFTOffers = useCallback(async () => {
+        await ensureConnectedWrapped();
+        const accountsToScan = [ISSUER_WALLET.address, ...initialUsers.map(u => u.id)];
+        const offersAccum: Array<any> = [];
+
+        for (const acct of accountsToScan) {
+            try {
+                const acctNftsRes = await client.request({ command: 'account_nfts', account: acct, limit: 200 });
+                const nftList = acctNftsRes.result.account_nfts || [];
+                for (const nft of nftList) {
+                    const nftAny: any = nft;
+                    const nftId = nftAny.NFTokenID || nftAny.nft_id || '';
+                    try {
+                        const sellRes = await client.request({ command: 'nft_sell_offers', nft_id: nftId });
+                        const sellOffers = sellRes.result.offers || [];
+                        for (const so of sellOffers) {
+                            const soAny: any = so;
+                            const uriHex = nftAny.URI || nftAny.uri || '';
+                            const metaStr = uriHex ? hexToString(uriHex) : '';
+                            let parsedMeta: any = null;
+                            try { parsedMeta = JSON.parse(metaStr); } catch (e) { parsedMeta = null; }
+                            offersAccum.push({
+                                nftId,
+                                seller: acct,
+                                sellOfferIndex: soAny.nft_offer_index || soAny.index || soAny.offer_index || soAny.offerId || soAny.nft_offer_id,
+                                amount: soAny.amount || soAny.Amount || soAny.value || soAny.price || '0',
+                                rawOffer: soAny,
+                                metadata: parsedMeta,
+                            });
+                        }
+                    } catch (e) {
+                        // ignore per-nft errors
+                    }
+                }
+            } catch (e) {
+                // ignore account errors
+            }
+        }
+
+        setMarketplaceNFTOffers(offersAccum);
+        return offersAccum;
+    }, []);
+
+    const buyNFTOffer = useCallback(async (sellOfferIndex: string | number, nftId: string) => {
+        if (!currentUser) return { error: 'not_logged_in' };
+        const buyerWallet = xrpl.Wallet.fromSeed(currentUser.secret);
+        await ensureConnectedWrapped();
+
+        try {
+            // Ensure the sell offer exists (wait for it briefly if necessary)
+            const found = await waitForOffer(nftId, undefined, 'sell', 20000, 1000);
+            if (!found && !sellOfferIndex) {
+                return { error: 'offer_not_found' };
+            }
+            const offerIndex = (found && found.index) ? found.index : String(sellOfferIndex);
+
+            const tx: any = { TransactionType: 'NFTokenAcceptOffer', Account: buyerWallet.address, NFTokenSellOffer: String(offerIndex) };
+            let prepared: any = await client.autofill(tx);
+            try { prepared.LastLedgerSequence = (prepared.LastLedgerSequence || 0) + 100; } catch (e) {}
+            const signed = buyerWallet.sign(prepared);
+            const res = await client.submitAndWait(signed.tx_blob);
+            console.debug('NFTokenAcceptOffer (buy) result', res?.result || res);
+            await refreshMarketplaceNFTOffers();
+            await refreshData(currentUser.id);
+            return res;
+        } catch (e) {
+            console.error('Buying NFT offer failed', e);
+            return { error: extractErrorMessage(e) };
+        }
+    }, [currentUser, refreshData, refreshMarketplaceNFTOffers]);
+
     const login = useCallback(async (secret: string): Promise<boolean> => {
         try {
             setIsLoading(true);
             const userWallet = xrpl.Wallet.fromSeed(secret);
-            const user = initialUsers.find(u => u.id === userWallet.address);
-
-            if (user) {
-                await refreshData(user.id);
-                setCurrentUser(user);
-                setIsLoading(false);
-                return true;
+            // Try to find a demo user by address; if not found, create a minimal user record.
+            let user = initialUsers.find(u => u.id === userWallet.address);
+            if (!user) {
+                user = {
+                    id: userWallet.address,
+                    name: `User ${userWallet.address.slice(0,6)}`,
+                    role: 'CONSUMER',
+                    kycVerified: false,
+                    secret
+                } as User;
+            } else {
+                // ensure secret is set on the returned user for demo purposes
+                (user as any).secret = secret;
             }
+
+            // Persist logged-in user to localStorage so page reloads keep state.
+            // WARNING: storing wallet secrets in localStorage is insecure and only acceptable for local/demo usage.
+            try { localStorage.setItem('dex_user', JSON.stringify({ id: user.id, secret })); } catch (e) {}
+
+            await refreshData(user.id);
+            setCurrentUser(user);
+            setIsLoading(false);
+            return true;
         } catch (error) {
             console.error("Login failed:", error);
         }
@@ -184,13 +404,96 @@ export const useDEX = () => {
         setBalances({ et: 0, usd: 0 });
         setOrders([]);
         setTransactions([]);
+        try { localStorage.removeItem('dex_user'); } catch (e) {}
     }, [disconnectClient]);
+
+    // On mount, restore persisted user from localStorage (if any) and refresh data.
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem('dex_user');
+            if (raw) {
+                const parsed = JSON.parse(raw) as { id: string; secret?: string };
+                if (parsed && parsed.id) {
+                    const restored: User = initialUsers.find(u => u.id === parsed.id) || ({ id: parsed.id, name: parsed.id, role: 'CONSUMER', kycVerified: false, secret: parsed.secret || '' } as User);
+                    // if secret is available, attach it
+                    if (parsed.secret) (restored as any).secret = parsed.secret;
+                    setCurrentUser(restored);
+                    // best-effort refresh
+                    refreshData(restored.id).catch(() => {});
+                }
+            }
+        } catch (e) {
+            // ignore restore errors
+        }
+    }, []);
 
     const createOrder = useCallback(async (type: 'BID' | 'OFFER', amount: number, price: number) => {
         if (!currentUser) return;
         
         const userWallet = xrpl.Wallet.fromSeed(currentUser.secret);
-        if (!client.isConnected()) await client.connect();
+        await ensureConnectedWrapped();
+
+        // Fetch freshest balances for the account to avoid creating unfunded offers
+        try {
+            const acctLines = await client.request({ command: 'account_lines', account: userWallet.address });
+            const etBalStr = acctLines.result.lines.find((l: any) => l.currency === ET_CURRENCY_CODE)?.balance ?? '0';
+            const usdBalStr = acctLines.result.lines.find((l: any) => l.currency === USD_CURRENCY_CODE)?.balance ?? '0';
+            const etBal = Math.abs(parseFloat(etBalStr));
+            const usdBal = Math.abs(parseFloat(usdBalStr));
+
+            if (type === 'OFFER') {
+                // Prefer NFT (MPT) sell offers if the user owns MPT NFTs for the amount requested.
+                    // If the user has MPT NFTs, prefer selling them. NFTs are discrete — if the requested amount
+                    // is fractional (e.g., 0.5) we treat it as a single NFT sale. If the user requests multiple NFTs,
+                    // require an integer amount or round up to the needed count.
+                    let needed = Number.isFinite(amount) ? Math.ceil(amount) : 1;
+                    if (amount > 0 && amount < 1) {
+                        // user requested fractional amount; interpret as intent to sell 1 NFT
+                        needed = 1;
+                    }
+                    if (mpts.length >= needed) {
+                    // If the form supplied a USD price (price param), convert to drops automatically.
+                    let priceDrops: string | null = null;
+                    if (price && typeof price === 'number' && price > 0) {
+                        priceDrops = usdToDrops(price);
+                    } else {
+                        // If no USD price provided, prompt for drops
+                        const raw = prompt(`You own ${mpts.length} MPT NFTs. Enter sell price in drops for each NFT (1 XRP = 1,000,000 drops). For testing use small values, e.g., 1`);
+                        if (!raw) return;
+                        if (!/^[0-9]+$/.test(raw)) {
+                            alert('Price must be an integer number of drops.');
+                            return;
+                        }
+                        priceDrops = raw;
+                    }
+
+                    // Create sell offers for the first `needed` MPTs
+                    for (let i = 0; i < needed; i++) {
+                        const nft = mpts[i];
+                        if (!nft) continue;
+                        await createNFTSellOffer(nft.hash, priceDrops as string);
+                    }
+                    await refreshData(userWallet.address);
+                    return;
+                }
+
+                // Selling ET fungible path: ensure user has enough ET to cover the offer amount
+                if (etBal < amount) {
+                    alert(`Insufficient ${ET_CURRENCY_CODE} balance (${etBal}). Cannot create sell offer for ${amount}.`);
+                    return;
+                }
+            } else if (type === 'BID') {
+                // Buying ET: ensure user has enough USD to cover amount * price
+                const required = amount * price;
+                if (usdBal < required) {
+                    alert(`Insufficient ${USD_CURRENCY_CODE} balance (${usdBal}). Need ${required} to place this bid.`);
+                    return;
+                }
+            }
+        } catch (err) {
+            console.debug('Could not fetch fresh account_lines before creating order:', err);
+            // proceed — submission will surface any ledger errors
+        }
 
         // For a BID (buy ET), TakerGets is ET, TakerPays is USD
         // For an OFFER (sell ET), TakerGets is USD, TakerPays is ET
@@ -219,7 +522,7 @@ export const useDEX = () => {
         
         try {
             let prepared: any = await client.autofill(transaction);
-            try { prepared.LastLedgerSequence = (prepared.LastLedgerSequence || 0) + 500; } catch (e) {}
+            try { prepared.LastLedgerSequence = (prepared.LastLedgerSequence || 0) + 100; } catch (e) {}
             const signed = userWallet.sign(prepared);
             const res = await client.submitAndWait(signed.tx_blob);
             console.debug('OfferCreate result', res?.result || res);
@@ -237,8 +540,30 @@ export const useDEX = () => {
     const executeTrade = useCallback(async (order: Order) => {
          if (!currentUser) return;
         const userWallet = xrpl.Wallet.fromSeed(currentUser.secret);
-        if (!client.isConnected()) await client.connect();
-        
+        await ensureConnectedWrapped();
+
+        // If the order appears to be an NFT sell offer (MPT), route to NFT accept flow
+        const asAny: any = order as any;
+        const nftId = asAny.nftId || asAny.rawOffer?.nftId || asAny.rawOffer?.nftID || asAny.rawOffer?.NFTokenID || asAny.rawOffer?.nft_id || asAny.rawOffer?.nftId || asAny.metadata?.nftId;
+        const sellOfferIndex = asAny.sellOfferIndex || asAny.rawOffer?.sellOfferIndex || asAny.rawOffer?.sell_offer_index || asAny.rawOffer?.nft_offer_index || asAny.rawOffer?.offer_index || asAny.rawOffer?.index;
+        if (nftId && sellOfferIndex) {
+            try {
+                const res = await buyNFTOffer(sellOfferIndex, nftId);
+                if ((res as any)?.error) {
+                    alert(`NFT purchase failed: ${(res as any).error}`);
+                } else {
+                    alert('NFT purchase submitted; refreshing data...');
+                }
+                await refreshData(currentUser.id);
+                return;
+            } catch (err) {
+                console.error('NFT purchase (executeTrade) failed:', err);
+                alert(`Error purchasing NFT: ${extractErrorMessage(err)}`);
+                return;
+            }
+        }
+
+        // Fallback: create a fungible OfferCreate to match the order
         // We create a matching order with the `tfImmediateOrCancel` flag
         // This ensures it fills what it can from the target order without placing a new one
         const transaction: xrpl.OfferCreate = {
@@ -248,7 +573,7 @@ export const useDEX = () => {
             TakerPays: order.gets,
             Flags: xrpl.OfferCreateFlags.tfImmediateOrCancel,
         };
-        
+
         try {
             let prepared: any = await client.autofill(transaction);
             try { prepared.LastLedgerSequence = (prepared.LastLedgerSequence || 0) + 100; } catch (e) {}
@@ -265,12 +590,67 @@ export const useDEX = () => {
         }
     }, [currentUser, refreshData]);
 
+    // Create an NFToken sell offer for a given NFTokenID (used for selling MPT NFTs)
+    const createNFTSellOffer = useCallback(async (nfTokenId: string, priceDrops: string) => {
+        if (!currentUser) return;
+        // Support price passed as `USD:<amount>` to allow UI to pass USD and convert to drops here
+        try {
+            if (typeof priceDrops === 'string' && priceDrops.startsWith('USD:')) {
+                const v = parseFloat(priceDrops.split(':')[1] || '0');
+                if (!isNaN(v) && v > 0) {
+                    priceDrops = usdToDrops(v);
+                }
+            }
+        } catch (e) {
+            // ignore and proceed
+        }
+        const userWallet = xrpl.Wallet.fromSeed(currentUser.secret);
+        await ensureConnectedWrapped();
+
+        // Verify ownership of the NFT
+        try {
+            const res = await client.request({ command: 'account_nfts', account: userWallet.address, limit: 200 });
+            const nfts = res.result.account_nfts || [];
+            const owns = nfts.some((n: any) => (n.NFTokenID || n.nft_id || '') === nfTokenId);
+            if (!owns) {
+                alert('You do not own that NFToken or it cannot be found in your account.');
+                return { error: 'not_owner' };
+            }
+        } catch (e) {
+            console.debug('Could not verify NFT ownership before creating sell offer', e);
+            // continue and let submit surface any issues
+        }
+
+        const tx: any = {
+            TransactionType: 'NFTokenCreateOffer',
+            Account: userWallet.address,
+            NFTokenID: nfTokenId,
+            Amount: priceDrops // in drops (string)
+        };
+
+        try {
+            let prepared: any = await client.autofill(tx);
+            try { prepared.LastLedgerSequence = (prepared.LastLedgerSequence || 0) + 100; } catch (e) {}
+            const signed = userWallet.sign(prepared);
+            const resp = await client.submitAndWait(signed.tx_blob);
+            console.debug('NFTokenCreateOffer (sell) result', resp?.result || resp);
+            alert('NFT sell offer created. Refreshing data...');
+            await refreshData(currentUser.id);
+            return resp;
+        } catch (error) {
+            console.error('Creating NFT sell offer failed', error);
+            const msg = extractErrorMessage(error);
+            alert(`Error creating NFT sell offer: ${msg}`);
+            return { error: msg };
+        }
+    }, [currentUser, refreshData]);
+
     const simulateGeneration = useCallback(async (amount: number, metadata?: MPTMetadata) => {
         // NFT-based MPT minting: mint an NFToken with metadata and transfer to recipient
         if (!currentUser || currentUser.role !== 'PROSUMER') return;
 
         const issuerWallet = xrpl.Wallet.fromSeed(ISSUER_WALLET.secret);
-        if (!client.isConnected()) await client.connect();
+        await ensureConnectedWrapped();
 
         try {
             // 1) Mint NFToken on issuer with URI containing metadata JSON (hex-encoded)
@@ -327,20 +707,18 @@ export const useDEX = () => {
                 return { mintRes, directRes };
             }
 
-            // 2) Wait briefly then locate the newly minted NFT on the issuer account
-            await new Promise(r => setTimeout(r, 1000));
-            const issuerNftsRes = await client.request({ command: 'account_nfts', account: issuerWallet.address, limit: 200 });
-            const nftList = issuerNftsRes.result.account_nfts || [];
+            // 2) Wait for the newly minted NFT to appear on the issuer account (by matching URI hex)
             let newNft: any = null;
             if (metadata) {
                 const targetHex = stringToHex(JSON.stringify(metadata)).replace(/^0x/, '');
-                for (const n of nftList) {
-                    const nAny: any = n;
-                    const u = (nAny.URI || '').replace(/^0x/, '');
-                    if (u && u === targetHex) { newNft = nAny; break; }
-                }
+                newNft = await waitForNftByUriHex(targetHex, issuerWallet.address, 20000, 1000);
             }
-            if (!newNft) newNft = nftList[nftList.length - 1];
+            if (!newNft) {
+                // fallback: fetch latest issuer NFTs and take the last one
+                const issuerNftsRes = await client.request({ command: 'account_nfts', account: issuerWallet.address, limit: 200 });
+                const nftList = (issuerNftsRes as any).result?.account_nfts || [];
+                newNft = nftList[nftList.length - 1];
+            }
 
             if (!newNft) {
                 console.warn('Could not locate minted NFT; aborting transfer.');
@@ -375,73 +753,133 @@ export const useDEX = () => {
 
             const nfId = newNft.NFTokenID || (newNft as any).nft_id || '';
 
-            // 3) Create a BUY offer from the recipient (Account = recipient, Owner = issuer)
-            //    Then have the issuer accept that buy offer. This avoids Owner/Account equality errors.
+            // 3) Simplified approach: Use NFTokenBurn + Direct transfer or just mint directly to recipient
+            // if the ledger supports the Destination field on NFTokenMint.
             const recipientWallet = xrpl.Wallet.fromSeed(currentUser.secret);
-            // buy offers must have Amount > 0 (drops). Use 1 drop for a free-ish transfer.
-            const buyOfferTx: any = {
-                TransactionType: 'NFTokenCreateOffer',
-                Account: recipientWallet.address,
-                Owner: issuerWallet.address,
-                NFTokenID: nfId,
-                Amount: '1'
-            };
-            let preparedBuyOffer: any = await client.autofill(buyOfferTx);
-            try { preparedBuyOffer.LastLedgerSequence = (preparedBuyOffer.LastLedgerSequence || 0) + 100; } catch (e) {}
-            const signedBuyOffer = recipientWallet.sign(preparedBuyOffer);
-            const buyOfferRes = await client.submitAndWait(signedBuyOffer.tx_blob);
-            console.debug('NFTokenCreateOffer (buy) result', buyOfferRes?.result || buyOfferRes);
-
-            // Wait then locate the buy offer index so the issuer can accept it
-            await new Promise(r => setTimeout(r, 1000));
-            let buyOfferIndex: string | undefined = undefined;
-            try {
-                const buyOffersRes = await client.request({ command: 'nft_buy_offers', nft_id: nfId });
-                const buyOffers = buyOffersRes.result.offers || [];
-                for (const o of buyOffers) {
-                    const oAny: any = o;
-                    const owner = oAny.owner || oAny.Account || oAny.account;
-                    // buy offers will have owner = recipient
-                    if (owner === recipientWallet.address) {
-                        buyOfferIndex = oAny.nft_offer_index || oAny.index || oAny.offer_index || oAny.nft_offer_id || oAny.offerId || oAny.offer_index;
-                        break;
-                    }
-                }
-            } catch (e) {
-                // fallback: try nft_sell_offers and search for a matching offer
+            
+            // Attempt direct transfer via Destination field first (most reliable)
+            const attemptDirectTransfer = async (): Promise<boolean> => {
                 try {
-                    const sellOffersRes = await client.request({ command: 'nft_sell_offers', nft_id: nfId });
-                    const offers = sellOffersRes.result.offers || [];
-                    for (const o of offers) {
-                        const oAny: any = o;
-                        const owner = oAny.owner || oAny.Account || oAny.seller;
-                        if (owner === recipientWallet.address) {
-                            buyOfferIndex = oAny.nft_offer_index || oAny.index || oAny.offer_index || oAny.nft_offer_id || oAny.offerId;
-                            break;
-                        }
+                    const directTransferTx: any = {
+                        TransactionType: 'NFTokenMint',
+                        Account: issuerWallet.address,
+                        NFTokenTaxon: 0,
+                        Flags: 0x00000008, // tfTransferable
+                        Destination: recipientWallet.address
+                    };
+                    if (metadata) directTransferTx.URI = stringToHex(JSON.stringify(metadata));
+                    
+                    await ensureConnectedWrapped();
+                    let prepared: any = await client.autofill(directTransferTx);
+                    try { prepared.LastLedgerSequence = (prepared.LastLedgerSequence || 0) + 100; } catch (e) {}
+                    const signed = issuerWallet.sign(prepared);
+                    const res = await client.submitAndWait(signed.tx_blob);
+                    const engine = (res as any)?.result?.engine_result || (res as any)?.engine_result || '';
+                    console.debug('Direct NFTokenMint (Destination field) result:', { engine, res });
+                    
+                    if (String(engine).startsWith('tes')) {
+                        console.log('✓ Direct NFT transfer to recipient succeeded');
+                        await refreshData(currentUser.id);
+                        alert(`${amount} ET minted as NFT and transferred successfully!`);
+                        return true;
                     }
-                } catch (ee) {
-                    // ignore
+                } catch (e) {
+                    console.debug('Direct transfer via Destination field failed (expected on some ledgers)', e?.message || e);
                 }
+                return false;
+            };
+            
+            // Try direct transfer first
+            const directSuccess = await attemptDirectTransfer();
+            if (directSuccess) {
+                return { mintRes, transferred: true };
             }
-
-            if (!buyOfferIndex) {
-                console.warn('Could not locate buy offer index to accept. Returning after mint.');
+            
+            // Fallback: Use buy/sell offer mechanism
+            console.log('Falling back to buy/sell offer mechanism...');
+            try {
+                // Create a buy offer from the recipient (minimal amount = 1 drop)
+                const buyOfferTx: any = {
+                    TransactionType: 'NFTokenCreateOffer',
+                    Account: recipientWallet.address,
+                    Owner: issuerWallet.address,
+                    NFTokenID: nfId,
+                    Amount: '1'
+                };
+                
+                let preparedBuyOffer: any = await client.autofill(buyOfferTx);
+                try { preparedBuyOffer.LastLedgerSequence = (preparedBuyOffer.LastLedgerSequence || 0) + 100; } catch (e) {}
+                const signedBuyOffer = recipientWallet.sign(preparedBuyOffer);
+                
+                let buyOfferRes: any = null;
+                try {
+                    buyOfferRes = await client.submitAndWait(signedBuyOffer.tx_blob);
+                    console.debug('Buy offer result:', buyOfferRes?.result || buyOfferRes);
+                } catch (submitErr) {
+                    console.error('Buy offer submission failed', submitErr);
+                    throw submitErr;
+                }
+                
+                // Extract the buy offer index
+                let buyOfferIndex: string | number | undefined = (buyOfferRes as any)?.result?.nft_offer_index || 
+                                                                   (buyOfferRes as any)?.result?.offer_index || 
+                                                                   (buyOfferRes as any)?.nft_offer_index || 
+                                                                   (buyOfferRes as any)?.result?.index;
+                
+                // If index not in response, poll for it
+                if (!buyOfferIndex) {
+                    const end = Date.now() + 30000;
+                    while (Date.now() < end && !buyOfferIndex) {
+                        try {
+                            await ensureConnectedWrapped();
+                            const probe = await client.request({ command: 'nft_buy_offers', nft_id: nfId });
+                            const offers = (probe as any).result?.offers || [];
+                            for (const o of offers) {
+                                const owner = String(o.owner || o.Account || o.account || '').toLowerCase();
+                                if (owner === String(recipientWallet.address).toLowerCase()) {
+                                    buyOfferIndex = o.nft_offer_index || o.index || o.offer_index || o.nft_offer_id;
+                                    break;
+                                }
+                            }
+                        } catch (e) {
+                            console.debug('Polling for buy offer index...', e?.message || '');
+                        }
+                        if (!buyOfferIndex) await new Promise(r => setTimeout(r, 1000));
+                    }
+                }
+                
+                if (!buyOfferIndex) {
+                    throw new Error('Could not find buy offer index for NFT transfer');
+                }
+                
+                // Issuer accepts the buy offer
+                const acceptTx: any = {
+                    TransactionType: 'NFTokenAcceptOffer',
+                    Account: issuerWallet.address,
+                    NFTokenBuyOffer: String(buyOfferIndex)
+                };
+                
+                let preparedAccept: any = await client.autofill(acceptTx);
+                try { preparedAccept.LastLedgerSequence = (preparedAccept.LastLedgerSequence || 0) + 100; } catch (e) {}
+                const signedAccept = issuerWallet.sign(preparedAccept);
+                
+                const acceptRes = await client.submitAndWait(signedAccept.tx_blob);
+                const acceptEngine = (acceptRes as any)?.result?.engine_result || (acceptRes as any)?.engine_result || '';
+                console.debug('Accept offer result:', { acceptEngine, acceptRes });
+                
+                if (!String(acceptEngine).startsWith('tes')) {
+                    throw new Error(`NFT transfer failed: ${acceptEngine}`);
+                }
+                
+                console.log('✓ NFT transferred successfully via buy/sell offer');
                 await refreshData(currentUser.id);
-                return { mintRes, buyOfferRes };
+                alert(`${amount} ET minted as NFT and transferred successfully!`);
+                return { mintRes, buyOfferRes, acceptRes, transferred: true };
+                
+            } catch (fallbackErr) {
+                console.error('Buy/sell offer transfer failed:', fallbackErr);
+                throw fallbackErr;
             }
-
-            // 4) Issuer accepts the buy offer to transfer NFT
-            const acceptTx: any = { TransactionType: 'NFTokenAcceptOffer', Account: issuerWallet.address, NFTokenBuyOffer: buyOfferIndex };
-            let preparedAccept: any = await client.autofill(acceptTx);
-            try { preparedAccept.LastLedgerSequence = (preparedAccept.LastLedgerSequence || 0) + 100; } catch (e) {}
-            const signedAccept = issuerWallet.sign(preparedAccept);
-            const acceptRes = await client.submitAndWait(signedAccept.tx_blob);
-            console.debug('NFTokenAcceptOffer result', acceptRes?.result || acceptRes);
-
-            alert(`${amount} ET minted as NFT and transferred successfully! Refreshing data...`);
-            await refreshData(currentUser.id);
-            return { mintRes, buyOfferRes, acceptRes };
         } catch (error) {
             console.error('NFT minting/transfer failed:', error);
             const msg = extractErrorMessage(error);
@@ -468,9 +906,16 @@ export const useDEX = () => {
         transactions,
         mpts,
         marketOrders,
+        marketplaceNFTOffers,
+        refreshMarketplaceNFTOffers,
+        buyNFTOffer,
         createOrder,
         executeTrade,
         simulateGeneration,
-        isLoading
+        isLoading,
+        convertUsdToDrops: usdToDrops,
+        isConnected,
+        reconnect: ensureConnectedWrapped,
+        disconnect: disconnectClient,
     };
 };

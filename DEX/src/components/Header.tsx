@@ -11,10 +11,13 @@ interface HeaderProps {
   onLogout: () => void;
   // FIX: Prop renamed to `balances` and type changed to `Balances` to match the `useDEX` hook.
   balances: Balances;
+  mptCount?: number;
+  isConnected?: boolean;
+  onReconnect?: () => void;
 }
 
 // FIX: Destructure `balances` prop instead of `wallet`.
-const Header: React.FC<HeaderProps> = ({ currentView, setCurrentView, currentUser, onLogout, balances }) => {
+const Header: React.FC<HeaderProps> = ({ currentView, setCurrentView, currentUser, onLogout, balances, mptCount, isConnected, onReconnect }) => {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: DashboardIcon },
     { id: 'marketplace', label: 'Marketplace', icon: MarketplaceIcon },
@@ -47,16 +50,38 @@ const Header: React.FC<HeaderProps> = ({ currentView, setCurrentView, currentUse
               ))}
             </nav>
           </div>
-          <div className="flex items-center space-x-4">
+           <div className="flex items-center space-x-4">
              <div className="hidden sm:flex items-center space-x-4">
                <div className="text-right">
                   <p className="text-sm font-medium text-dex-gray-800">{currentUser.name}</p>
                   <p className="text-xs text-dex-gray-500">{currentUser.role}</p>
               </div>
+              {/* Connection status */}
+              <div className="flex items-center space-x-3">
+                <div className="flex items-center space-x-2">
+                  <span
+                    className={`inline-block h-3 w-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-400'}`}
+                    aria-hidden={true}
+                  />
+                  <span className="text-xs text-dex-gray-600">{isConnected ? 'Connected' : 'Disconnected'}</span>
+                </div>
+                {/* Reconnect button appears when disconnected and handler provided */}
+                {!isConnected && onReconnect && (
+                  <button
+                    onClick={onReconnect}
+                    className="px-2 py-1 text-xs font-medium rounded-md border border-dex-gray-300 text-dex-gray-700 bg-white hover:bg-dex-gray-50 transition-colors duration-150"
+                  >
+                    Reconnect
+                  </button>
+                )}
+              </div>
               <div className="text-right">
                  {/* FIX: Use `balances.et` and `balances.usd` for consistency with the `useDEX` hook. */}
                  <p className="text-sm font-semibold text-dex-green">{balances.et.toFixed(2)} ET</p>
                  <p className="text-sm font-semibold text-dex-blue">${balances.usd.toFixed(2)}</p>
+                {typeof mptCount === 'number' && (
+                  <p className="text-xs text-dex-gray-500">MPTs: {mptCount}</p>
+                )}
               </div>
             </div>
              <div className="border-l pl-4 border-dex-gray-200">
