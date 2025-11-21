@@ -49,24 +49,24 @@ const TransactionRow: React.FC<{ tx: Transaction, currentUserId: string }> = ({ 
     }
 
     return (
-        <tr className="hover:bg-dex-gray-50">
-            <td className="px-4 py-4 whitespace-nowrap">{type}</td>
-            <td className="px-4 py-4 whitespace-nowrap text-sm text-dex-gray-600">{tx.date ? format(xrpl.rippleTimeToDate(tx.date), 'Pp') : '-'}</td>
-            <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-dex-gray-800">{details}</td>
-            <td className="px-4 py-4 whitespace-nowrap text-sm font-bold">{total}</td>
-            <td className="px-4 py-4 whitespace-nowrap text-sm text-dex-gray-500 font-mono hidden sm:table-cell">
-                <a
-                    href={`https://testnet.xrpl.org/transactions/${tx.hash}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title="View on XRPL Testnet explorer"
-                    className="inline-flex items-center text-dex-blue hover:underline"
-                >
-                    {tx.hash.substring(0, 12)}...
-                    <ExternalLinkIcon className="h-4 w-4 ml-1.5" />
-                </a>
-            </td>
-        </tr>
+      <tr className="hover:bg-dex-gray-50">
+        <td className="px-4 py-4 whitespace-nowrap">{type}</td>
+        <td className="px-4 py-4 whitespace-nowrap text-sm text-dex-gray-600">{tx.date ? format(new Date((Number(tx.date) + 946684800) * 1000), 'Pp') : '-'}</td>
+        <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-dex-gray-800">{details}</td>
+        <td className="px-4 py-4 whitespace-nowrap text-sm font-bold">{total}</td>
+        <td className="px-4 py-4 whitespace-nowrap text-sm text-dex-gray-500 font-mono hidden sm:table-cell">
+          <a
+            href={`https://testnet.xrpl.org/transactions/${tx.hash}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="View on XRPL Testnet explorer"
+            className="inline-flex items-center text-dex-blue hover:underline"
+          >
+            {tx.hash.substring(0, 12)}...
+            <ExternalLinkIcon className="h-4 w-4 ml-1.5" />
+          </a>
+        </td>
+      </tr>
     );
 }
 

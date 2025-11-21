@@ -78,11 +78,11 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 <ul className="list-disc list-inside space-y-2 text-left">
                     <li>
                         <span className="font-bold">Prosumer (Seller):</span>
-                        <code className="block break-all font-mono bg-dex-gray-200 px-1.5 py-0.5 rounded mt-1">sEd7g2R93PS9Lz4M6jK74E1Jt3gDyjG</code>
+                        <code className="block break-all font-mono bg-dex-gray-200 px-1.5 py-0.5 rounded mt-1">sEd7e6gBkktLFwPdJJ5qMrNTNyaGG6s</code>
                     </li>
                     <li>
                         <span className="font-bold">Consumer (Buyer):</span>
-                         <code className="block break-all font-mono bg-dex-gray-200 px-1.5 py-0.5 rounded mt-1">sEdV1wL5sL2FqjK354t7fpmxTDFLgLo</code>
+                         <code className="block break-all font-mono bg-dex-gray-200 px-1.5 py-0.5 rounded mt-1">sEdV2dPUx6xs5wDCag6tXavWWMdqAQX</code>
                     </li>
                 </ul>
             </div>

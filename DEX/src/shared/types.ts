@@ -1,5 +1,3 @@
-import type * as xrpl from 'xrpl';
-
 export type UserRole = 'PROSUMER' | 'CONSUMER';
 
 export interface User {
@@ -11,15 +9,33 @@ export interface User {
 }
 
 export interface Balances {
-    et: number;
-    usd: number;
+  et: number;
+  usd: number;
 }
 
-// Using parsed format from xrpl.js for convenience
-export type Order = xrpl.Offer & { id: string };
+// Keep Order and Transaction loose (any) to avoid depending on xrpl.js internal typings
+export type Order = any & { id: string };
 
-// Using the base Transaction type from xrpl.js and extending it
-export type Transaction = xrpl.Transaction & {
-    hash: string;
-    date: number;
+export type Transaction = any & {
+  hash: string;
+  date?: number;
 };
+
+export interface Wallet {
+  userId: string;
+  etBalance: number;
+  usdBalance: number;
+}
+
+export type SourceType = 'Solar_PV' | 'Wind_Farm';
+
+export interface MPTMetadata {
+  sourceType: SourceType;
+  generationTime: string;
+  certificateId: string;
+  geoLocation: string;
+}
+
+export type OrderType = 'BID' | 'OFFER';
+
+

@@ -68,7 +68,19 @@ export const useDEX = () => {
 
         // Fetch User's Open Orders
         const accountOffers = await client.request({ command: 'account_offers', account: walletAddress });
-        const userOrders = accountOffers.result.offers.map(xrpl.parseOffer).map(o => ({...o, id: o.id.toString()}))
+        const userOrders = (accountOffers.result.offers || []).map((o: any, idx: number) => {
+            // Normalize fields from rippled offer format to our Order shape
+            const id = String(o.seq ?? o.id ?? o.offerSequence ?? idx);
+            return {
+                ...o,
+                id,
+                gets: o.taker_gets ?? o.TakerGets ?? o.gets,
+                pays: o.taker_pays ?? o.TakerPays ?? o.pays,
+                owner: o.account ?? o.owner ?? o.Account,
+                quality: o.quality ?? o.Quality,
+                created: o.date ?? o.timestamp ?? o.ledger_index
+            } as any;
+        });
         setOrders(userOrders);
 
         // Fetch Transaction History
@@ -83,10 +95,9 @@ export const useDEX = () => {
         const offersResponse = await client.request({ command: 'book_offers', taker_gets: usdPay, taker_pays: etGet });
 
         setMarketOrders({
-            bids: (bidsResponse.result.offers || []).map(xrpl.parseOffer).map(o => ({...o, id: o.id.toString()})),
-            offers: (offersResponse.result.offers || []).map(xrpl.parseOffer).map(o => ({...o, id: o.id.toString()}))
+            bids: (bidsResponse.result.offers || []).map((o: any, idx: number) => ({ ...(o as any), id: String(o.seq ?? o.id ?? idx) })),
+            offers: (offersResponse.result.offers || []).map((o: any, idx: number) => ({ ...(o as any), id: String(o.seq ?? o.id ?? idx) }))
         });
-
     }, []);
 
     const login = useCallback(async (secret: string): Promise<boolean> => {

@@ -67,14 +67,14 @@ const OrderBook: React.FC<OrderBookProps> = ({ title, orders, type, onExecute, c
               {orders.length > 0 ? orders.map((order) => {
                   const price = getPrice(order);
                   const amountToTrade = isOfferBook ? formatAmount(order.pays) : formatAmount(order.gets);
-                  const total = (parseFloat(amountToTrade) * price).toFixed(2);
+                  const total = (parseFloat(String(amountToTrade)) * price).toFixed(2);
                   
                   return (
                     <tr key={order.id} className="hover:bg-dex-gray-50">
                       <td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${isOfferBook ? 'text-red-600' : 'text-green-600'}`}>${price.toFixed(4)}</td>
                       <td className="px-4 py-4 whitespace-nowrap text-sm text-dex-gray-700">{amountToTrade}</td>
                       <td className="px-4 py-4 whitespace-nowrap text-sm text-dex-gray-500">${total}</td>
-                      <td className="px-4 py-4 whitespace-nowrap text-sm text-dex-gray-500 hidden sm:table-cell">{order.created ? formatDistanceToNow(xrpl.rippleTimeToDate(order.created), { addSuffix: true }) : '-'}</td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-dex-gray-500 hidden sm:table-cell">{order.created ? formatDistanceToNow(new Date((Number(order.created) + 946684800) * 1000), { addSuffix: true }) : '-'}</td>
                       <td className="px-4 py-4 whitespace-nowrap text-right text-sm font-medium">
                         {order.owner !== currentUserId && (
                           <button
