@@ -66,31 +66,64 @@ const Marketplace: React.FC<MarketplaceProps> = ({ dex }) => {
               currentUserId={currentUser.id}
             />
             
-            {/* Show prosumer's own NFTs as listings */}
+            {/* Show prosumer's own NFT listings only */}
             <Card>
               <h3 className="text-lg font-semibold mb-3 text-dex-gray-800">My Listed Energy NFTs</h3>
-              {acceptedMpts === 0 ? (
-                <p className="text-sm text-dex-gray-500">You don't have any Energy NFTs listed yet. Mint energy on the Dashboard to create listings.</p>
+              {/* Hardcoded demo listing for prosumer */}
+              {currentUser.id === 'rDfNEueAZPPLhaC6HXjvTAmM9JzeEV5NrR' && (
+                <div className="space-y-3 mb-3">
+                  <div className="flex items-center justify-between p-4 border border-dex-gray-200 rounded-lg bg-gradient-to-r from-blue-50 to-green-50 hover:shadow-md transition-shadow">
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-dex-gray-800">Solar Energy NFT - Demo Listing</p>
+                      <p className="text-xs text-dex-gray-600 mt-1 font-mono truncate">ID: 00010000A42F5B5E...</p>
+                      <p className="text-xs text-dex-gray-600">
+                        Generated: {new Date().toLocaleDateString()}
+                      </p>
+                      <p className="text-xs text-dex-gray-600 mt-1">
+                        Location: Unknown
+                      </p>
+                      <p className="text-sm font-bold text-dex-green mt-2">
+                        Price: 2.50 XRP (~$1.25)
+                      </p>
+                    </div>
+                    <div className="ml-4 text-right">
+                      <p className="text-xs text-dex-gray-600">Status</p>
+                      <p className="text-sm font-semibold text-dex-green">Listed</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              {/* Real marketplace listings from blockchain */}
+              {!dex.marketplaceNFTOffers || dex.marketplaceNFTOffers.filter(o => o.seller === currentUser.id).length === 0 ? (
+                currentUser.id !== 'rDfNEueAZPPLhaC6HXjvTAmM9JzeEV5NrR' && (
+                  <p className="text-sm text-dex-gray-500">You don't have any Energy NFTs listed yet. Mint energy on the Dashboard to create listings.</p>
+                )
               ) : (
                 <div className="space-y-3">
-                  {mpts.filter(m => m.transferable).map((nft) => (
-                    <div key={nft.nftId} className="flex items-center justify-between p-4 border border-dex-gray-200 rounded-lg bg-gradient-to-r from-blue-50 to-green-50 hover:shadow-md transition-shadow">
-                      <div className="flex-1">
-                        <p className="text-sm font-semibold text-dex-gray-800">{nft.metadata?.sourceType || 'Energy'} NFT</p>
-                        <p className="text-xs text-dex-gray-600 mt-1 font-mono truncate">ID: {nft.nftId.slice(0, 20)}...</p>
-                        <p className="text-xs text-dex-gray-600">
-                          Generated: {new Date(nft.metadata?.generationTime || '').toLocaleDateString()}
-                        </p>
-                        <p className="text-xs text-dex-gray-600 mt-1">
-                          Location: {nft.metadata?.geoLocation || 'Unknown'}
-                        </p>
+                  {dex.marketplaceNFTOffers
+                    .filter(o => o.seller === currentUser.id)
+                    .map((listing) => (
+                      <div key={`${listing.nftId}-${listing.sellOfferIndex}`} className="flex items-center justify-between p-4 border border-dex-gray-200 rounded-lg bg-gradient-to-r from-blue-50 to-green-50 hover:shadow-md transition-shadow">
+                        <div className="flex-1">
+                          <p className="text-sm font-semibold text-dex-gray-800">{listing.metadata?.sourceType || 'Energy'} NFT</p>
+                          <p className="text-xs text-dex-gray-600 mt-1 font-mono truncate">ID: {listing.nftId.slice(0, 20)}...</p>
+                          <p className="text-xs text-dex-gray-600">
+                            Generated: {listing.metadata?.generationTime ? new Date(listing.metadata.generationTime).toLocaleDateString() : 'Unknown'}
+                          </p>
+                          <p className="text-xs text-dex-gray-600 mt-1">
+                            Location: {listing.metadata?.geoLocation || 'Unknown'}
+                          </p>
+                          <p className="text-sm font-bold text-dex-green mt-2">
+                            Price: {(parseInt(listing.amount || '0') / 1000000).toFixed(2)} XRP (~${(parseInt(listing.amount || '0') / 1000000 * 0.5).toFixed(2)})
+                          </p>
+                        </div>
+                        <div className="ml-4 text-right">
+                          <p className="text-xs text-dex-gray-600">Status</p>
+                          <p className="text-sm font-semibold text-dex-green">Listed</p>
+                        </div>
                       </div>
-                      <div className="ml-4 text-right">
-                        <p className="text-xs text-dex-gray-600">Status</p>
-                        <p className="text-sm font-semibold text-dex-green">Available</p>
-                      </div>
-                    </div>
-                  ))}
+                    ))}
                 </div>
               )}
             </Card>
@@ -146,7 +179,7 @@ const Marketplace: React.FC<MarketplaceProps> = ({ dex }) => {
                     try {
                       // Hardcoded wallets for demo
                       const prosumerAddress = 'rDfNEueAZPPLhaC6HXjvTAmM9JzeEV5NrR'; // Prosumer
-                      const nftId = '00010000A42F5B5E8F6B9C2D3E4F5A6B7C8D9E0F1A2B3C4D5E6F7A8B9C0D1E2'; // Demo NFT ID
+                      const nftId = '00010000A42F5B5E8F6B9C2D3E4F5A6B7C8D9E0F1A2B3C4D5E6F7A8B9C0D1E2F'; // Demo NFT ID (64 hex chars)
                       const priceDrops = '1000000'; // 1 XRP in drops
                       
                       console.log('Creating buy offer for demo listing:', {

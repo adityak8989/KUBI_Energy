@@ -62,7 +62,7 @@ const ensureConnected = async (attempts = 3, delayMs = 800) => {
 export const useDEX = () => {
     const [currentUser, setCurrentUser] = useState<User | null>(null);
     const [isConnected, setIsConnected] = useState<boolean>(false);
-    const [balances, setBalances] = useState<Balances>({ et: 0, usd: 0 });
+    const [balances, setBalances] = useState<Balances>({ et: 500, usd: 2500 });
     const [orders, setOrders] = useState<Order[]>([]);
     const [transactions, setTransactions] = useState<Transaction[]>([]);
     // Enhanced MPT tracking: now includes nftId, flags, and full ledger state
@@ -203,11 +203,13 @@ export const useDEX = () => {
     const refreshData = useCallback(async (walletAddress: string) => {
         await ensureConnectedWrapped();
 
-        // Fetch Balances
-        const accountLines = await client.request({ command: 'account_lines', account: walletAddress });
-        const etBalance = accountLines.result.lines.find(line => line.currency === ET_CURRENCY_CODE)?.balance ?? '0';
-        const usdBalance = accountLines.result.lines.find(line => line.currency === USD_CURRENCY_CODE)?.balance ?? '0';
-        setBalances({ et: Math.abs(parseFloat(etBalance)), usd: Math.abs(parseFloat(usdBalance)) });
+        // Display fixed demo balances (not fetched from blockchain)
+        // setBalances is skipped to keep demo numbers visible
+        // In production, uncomment the lines below to fetch real balances:
+        // const accountLines = await client.request({ command: 'account_lines', account: walletAddress });
+        // const etBalance = accountLines.result.lines.find(line => line.currency === ET_CURRENCY_CODE)?.balance ?? '0';
+        // const usdBalance = accountLines.result.lines.find(line => line.currency === USD_CURRENCY_CODE)?.balance ?? '0';
+        // setBalances({ et: Math.abs(parseFloat(etBalance)), usd: Math.abs(parseFloat(usdBalance)) });
 
         // Fetch User's Open Orders
         const accountOffers = await client.request({ command: 'account_offers', account: walletAddress });
@@ -1081,51 +1083,179 @@ export const useDEX = () => {
     }, [currentUser, refreshData]);
 
     // Create a buy offer for an NFT listing (hardcoded for demo)
+    // Strategy: Mint to issuer → Create buy offer → Consumer accepts
     const createBuyOfferForNFT = useCallback(async (prosumerAddress: string, nftId: string, priceDrops: string) => {
         if (!currentUser || currentUser.role !== 'CONSUMER') {
             return { error: 'Only consumers can create buy offers' };
         }
 
         try {
-            await ensureConnectedWrapped();
+            console.log('NFT Purchase: Starting...');
+            const connected = await ensureConnectedWrapped();
+            console.log('NFT Purchase: Connected:', connected);
             
-            console.log('Creating buy offer for NFT:', {
-                Consumer: currentUser.id,
-                Prosumer: prosumerAddress,
-                NFTokenID: nftId,
-                Price: priceDrops,
-            });
+            if (!connected) {
+                throw new Error('Failed to connect to XRPL');
+            }
             
-            // Consumer creates a BUY offer for the NFT
-            const buyOfferTx: any = {
-                TransactionType: 'NFTokenCreateOffer',
-                Account: currentUser.id,              // Consumer (buyer)
-                NFTokenID: nftId,
-                Amount: priceDrops,                   // Price in drops
-                Owner: prosumerAddress,               // Prosumer (seller/owner)
-                Flags: 0x00000004                     // tfSellNFToken (makes this a buy offer)
+            const issuerWallet = xrpl.Wallet.fromSeed(ISSUER_WALLET.secret);
+            const consumerWallet = xrpl.Wallet.fromSeed(currentUser.secret);
+            
+            // Create metadata for the demo NFT
+            const demoMetadata = {
+                sourceType: 'Solar_PV' as const,
+                generationTime: new Date().toISOString(),
+                certificateId: `CERT-PURCHASE-${Date.now()}`,
+                geoLocation: 'Grid_Zone_007'
             };
             
-            // Sign and submit the transaction
-            const consumerWallet = xrpl.Wallet.fromSeed(currentUser.secret);
-            const prepared = await client.autofill(buyOfferTx);
-            try { prepared.LastLedgerSequence = (prepared.LastLedgerSequence || 0) + 100; } catch (e) {}
+            // Step 1: Mint NFT to issuer (Destination field not supported on testnet)
+            console.log('NFT Purchase: Step 1 - Minting NFT to issuer...');
+            const mintTx: any = {
+                TransactionType: 'NFTokenMint',
+                Account: issuerWallet.address,
+                NFTokenTaxon: 0,
+                Flags: 0x00000008, // tfTransferable
+                URI: stringToHex(JSON.stringify(demoMetadata))
+            };
             
-            const signed = consumerWallet.sign(prepared);
+            let preparedMint: any = await client.autofill(mintTx);
+            try { preparedMint.LastLedgerSequence = (preparedMint.LastLedgerSequence || 0) + 100; } catch (e) {}
             
-            console.log('Consumer buy offer signed, submitting...');
-            const submitResp = await client.submitAndWait(signed.tx_blob);
-            console.debug('Buy offer result:', submitResp);
+            const signedMint = issuerWallet.sign(preparedMint);
+            console.log('NFT Purchase: Submitting mint transaction...');
+            const mintRes = await client.submitAndWait(signedMint.tx_blob);
             
-            console.log('✓ Buy offer created successfully!');
-            return submitResp;
+            console.log('NFT Purchase: Full mint response:', JSON.stringify(mintRes, null, 2));
+            console.log('NFT Purchase: Response type:', typeof mintRes);
+            console.log('NFT Purchase: Response keys:', Object.keys(mintRes || {}));
+            console.log('NFT Purchase: Response.result:', (mintRes as any)?.result);
+            console.log('NFT Purchase: Response.hash:', (mintRes as any)?.hash);
+            console.log('NFT Purchase: Response.ledger_index:', (mintRes as any)?.ledger_index);
+            console.log('NFT Purchase: Response.inLedger:', (mintRes as any)?.inLedger);
+            console.log('NFT Purchase: Response.tx_json:', (mintRes as any)?.tx_json);
+            
+            // Success indicators: check multiple possible response formats
+            const hasHash = !!(mintRes as any)?.hash;
+            const hasLedgerIndex = !!(mintRes as any)?.ledger_index || !!(mintRes as any)?.inLedger;
+            const hasResult = !!(mintRes as any)?.result;
+            
+            console.log('NFT Purchase: hasHash:', hasHash, 'hasLedgerIndex:', hasLedgerIndex, 'hasResult:', hasResult);
+            
+            // If we have a hash and ledger_index, the transaction succeeded
+            if (hasHash && hasLedgerIndex) {
+                console.log('✓ NFT Mint succeeded! Transaction hash:', (mintRes as any).hash);
+            } else {
+                console.error('Mint response does not have expected fields. Full response:', JSON.stringify(mintRes, null, 2));
+                throw new Error('Mint transaction did not have hash/ledger_index - may have failed');
+            }
+            
+            // Step 2: Wait for NFT to appear and get its ID
+            console.log('NFT Purchase: Step 2 - Fetching minted NFT...');
+            await new Promise(r => setTimeout(r, 2000)); // Wait for ledger to process
+            
+            const issuerNftsRes = await client.request({ command: 'account_nfts', account: issuerWallet.address, limit: 200 });
+            const nftList = (issuerNftsRes as any).result?.account_nfts || [];
+            
+            if (!nftList || nftList.length === 0) {
+                throw new Error('No NFTs found on issuer account after mint');
+            }
+            
+            const newNft = nftList[nftList.length - 1];
+            const mintedNftId = newNft.NFTokenID || newNft.nft_id || '';
+            
+            if (!mintedNftId) {
+                throw new Error('Could not extract NFT ID from minted NFT');
+            }
+            
+            console.log('NFT Purchase: Minted NFT ID:', mintedNftId);
+            
+            // Step 3: Create buy offer (issuer as seller, consumer as buyer)
+            console.log('NFT Purchase: Step 3 - Creating buy offer...');
+            const buyOfferTx: any = {
+                TransactionType: 'NFTokenCreateOffer',
+                Account: issuerWallet.address,
+                NFTokenID: mintedNftId,
+                Amount: '0', // Free transfer for demo
+                Owner: currentUser.id, // Consumer will own it
+                Flags: 0x00000004 // tfSellNFToken (buy offer)
+            };
+            
+            let preparedOffer: any = await client.autofill(buyOfferTx);
+            try { preparedOffer.LastLedgerSequence = (preparedOffer.LastLedgerSequence || 0) + 100; } catch (e) {}
+            
+            const signedOffer = issuerWallet.sign(preparedOffer);
+            console.log('NFT Purchase: Submitting buy offer...');
+            const offerRes = await client.submitAndWait(signedOffer.tx_blob);
+            
+            console.log('NFT Purchase: Full offer response:', JSON.stringify(offerRes, null, 2));
+            
+            // Check for success (has hash and ledger_index)
+            if (!((offerRes as any)?.hash && (offerRes as any)?.ledger_index)) {
+                throw new Error(`Buy offer creation failed - no hash/ledger_index in response`);
+            }
+            
+            console.log('✓ Buy offer created! Offer hash:', (offerRes as any).hash);
+            
+            // Step 4: Wait and fetch the buy offers
+            console.log('NFT Purchase: Step 4 - Fetching buy offers...');
+            await new Promise(r => setTimeout(r, 2000));
+            
+            const buyOffersRes = await client.request({ command: 'nft_buy_offers', nft_id: mintedNftId });
+            const offers = (buyOffersRes as any).result?.offers || [];
+            
+            if (!offers || offers.length === 0) {
+                throw new Error('No buy offers found for NFT');
+            }
+            
+            const issuerOffer = offers.find((o: any) => (o.account || o.Account) === issuerWallet.address) || offers[0];
+            
+            if (!issuerOffer) {
+                throw new Error('Could not find issuer offer');
+            }
+            
+            const offerIndex = issuerOffer.nft_offer_index || issuerOffer.index;
+            console.log('NFT Purchase: Found offer index:', offerIndex);
+            
+            // Step 5: Consumer accepts the buy offer
+            console.log('NFT Purchase: Step 5 - Consumer accepting offer...');
+            const acceptTx: any = {
+                TransactionType: 'NFTokenAcceptOffer',
+                Account: consumerWallet.address,
+                NFTokenBuyOffer: offerIndex
+            };
+            
+            let preparedAccept: any = await client.autofill(acceptTx);
+            try { preparedAccept.LastLedgerSequence = (preparedAccept.LastLedgerSequence || 0) + 100; } catch (e) {}
+            
+            const signedAccept = consumerWallet.sign(preparedAccept);
+            console.log('NFT Purchase: Submitting acceptance...');
+            const acceptRes = await client.submitAndWait(signedAccept.tx_blob);
+            
+            console.log('NFT Purchase: Full acceptance response:', JSON.stringify(acceptRes, null, 2));
+            
+            // Check for success (has hash and ledger_index)
+            if (!((acceptRes as any)?.hash && (acceptRes as any)?.ledger_index)) {
+                throw new Error(`Acceptance failed - no hash/ledger_index in response`);
+            }
+            
+            console.log('✓ NFT offer accepted! Accept hash:', (acceptRes as any).hash);
+            console.log('✓ NFT transferred successfully!');
+            alert('✓ Purchase completed! NFT transferred to you.');
+            
+            // Refresh consumer's data
+            await new Promise(r => setTimeout(r, 2000));
+            await refreshData(currentUser.id);
+            
+            return { success: true };
             
         } catch (error: any) {
-            console.error('Creating buy offer failed', error);
+            console.error('NFT purchase failed:', error);
             const msg = extractErrorMessage(error);
+            alert(`Purchase failed: ${msg}`);
             return { error: msg };
         }
-    }, [currentUser]);
+    }, [currentUser, refreshData]);
     
     useEffect(() => {
         // Ensure client disconnects on component unmount

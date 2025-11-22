@@ -20,18 +20,18 @@ interface DashboardProps {
 }
 
 const mockChartData = [
-  { name: 'Mon', generated: 25, consumed: 15 },
-  { name: 'Tue', generated: 30, consumed: 20 },
-  { name: 'Wed', generated: 22, consumed: 18 },
-  { name: 'Thu', generated: 45, consumed: 25 },
-  { name: 'Fri', generated: 50, consumed: 30 },
-  { name: 'Sat', generated: 60, consumed: 40 },
-  { name: 'Sun', generated: 55, consumed: 35 },
+  { name: 'Mon', generated: 125, consumed: 75 },
+  { name: 'Tue', generated: 150, consumed: 100 },
+  { name: 'Wed', generated: 110, consumed: 90 },
+  { name: 'Thu', generated: 225, consumed: 125 },
+  { name: 'Fri', generated: 250, consumed: 150 },
+  { name: 'Sat', generated: 300, consumed: 200 },
+  { name: 'Sun', generated: 275, consumed: 175 },
 ];
 
 const Dashboard: React.FC<DashboardProps> = ({ dex, setCurrentView }) => {
   const { currentUser, balances, simulateGeneration, mpts, isLoading, users, transferNFT, mintAndTransferNFTs } = dex;
-  const [generationAmount, setGenerationAmount] = useState('10');
+  const [generationAmount, setGenerationAmount] = useState('50');
   const [isMinting, setIsMinting] = useState(false);
   const [transferMode, setTransferMode] = useState<'none' | 'to-prosumer' | 'to-consumer'>('none');
   const [transferCount, setTransferCount] = useState('1');
