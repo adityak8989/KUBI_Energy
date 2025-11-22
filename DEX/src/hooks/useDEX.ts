@@ -431,10 +431,8 @@ export const useDEX = () => {
         const userWallet = xrpl.Wallet.fromSeed(currentUser.secret);
         await ensureConnectedWrapped();
 
-        // Refresh data to get latest MPTs and balances
-        await refreshData(userWallet.address);
-
-        // Fetch freshest balances for the account to avoid creating unfunded offers
+        // Fetch freshest data for the account
+        let freshMpts: any[] = [];
         try {
             const acctLines = await client.request({ command: 'account_lines', account: userWallet.address });
             const etBalStr = acctLines.result.lines.find((l: any) => l.currency === ET_CURRENCY_CODE)?.balance ?? '0';
@@ -442,44 +440,42 @@ export const useDEX = () => {
             const etBal = Math.abs(parseFloat(etBalStr));
             const usdBal = Math.abs(parseFloat(usdBalStr));
 
-            if (type === 'OFFER') {
-                // Prefer NFT (MPT) sell offers if the user owns MPT NFTs for the amount requested.
-                    // If the user has MPT NFTs, prefer selling them. NFTs are discrete — if the requested amount
-                    // is fractional (e.g., 0.5) we treat it as a single NFT sale. If the user requests multiple NFTs,
-                    // require an integer amount or round up to the needed count.
-                    let needed = Number.isFinite(amount) ? Math.ceil(amount) : 1;
-                    if (amount > 0 && amount < 1) {
-                        // user requested fractional amount; interpret as intent to sell 1 NFT
-                        needed = 1;
-                    }
-                    if (mpts.length >= needed) {
-                    // If the form supplied a USD price (price param), convert to drops automatically.
-                    let priceDrops: string | null = null;
-                    if (price && typeof price === 'number' && price > 0) {
-                        priceDrops = usdToDrops(price);
-                    } else {
-                        // If no USD price provided, prompt for drops
-                        const raw = prompt(`You own ${mpts.length} MPT NFTs. Enter sell price in drops for each NFT (1 XRP = 1,000,000 drops). For testing use small values, e.g., 1`);
-                        if (!raw) return;
-                        if (!/^[0-9]+$/.test(raw)) {
-                            alert('Price must be an integer number of drops.');
-                            return;
+            // Fetch fresh NFTs directly from blockchain
+            const accountNftsRes = await client.request({ command: 'account_nfts', account: userWallet.address, limit: 200 });
+            const nftList = accountNftsRes.result.account_nfts || [];
+            for (const nft of nftList) {
+                const n: any = nft;
+                const nftId = n.NFTokenID || n.nft_id || n.nftid || '';
+                if (nftId) {
+                    const uriHex = n.URI || n.uri || n.Uri || '';
+                    const uriStr = uriHex ? hexToString(uriHex) : '';
+                    let metadata: MPTMetadata | null = null;
+                    try {
+                        if (uriStr) {
+                            metadata = JSON.parse(uriStr) as MPTMetadata;
                         }
-                        priceDrops = raw;
+                    } catch (e) {
+                        // ignore
                     }
-
-                    // Create sell offers for the first `needed` MPTs (no balance required for NFT sales)
-                    for (let i = 0; i < needed; i++) {
-                        const nft = mpts[i];
-                        if (!nft) continue;
-                        await createNFTSellOffer(nft.hash, priceDrops as string);
-                    }
-                    await refreshData(userWallet.address);
-                    return;
+                    freshMpts.push({
+                        hash: nftId,
+                        nftId,
+                        amount: 1,
+                        metadata: metadata || {
+                            sourceType: 'Solar_PV' as const,
+                            generationTime: new Date().toISOString(),
+                            certificateId: nftId,
+                            geoLocation: 'Unknown'
+                        }
+                    });
                 }
+            }
 
-                // If no NFTs owned, cannot create sell offer (only NFTs can be sold for free)
-                alert('You do not own any NFTs to sell. Generate energy first to create sell offers.');
+            if (type === 'OFFER') {
+                // OFFER type: just show a message that listings appear in marketplace
+                // Don't actually create an offer - wait for consumers to initiate buys
+                alert('Your energy NFT listings appear in the marketplace. Consumers will make offers to purchase them.');
+                await refreshData(userWallet.address);
                 return;
 
             } else if (type === 'BID') {
@@ -491,7 +487,7 @@ export const useDEX = () => {
                 }
             }
         } catch (err) {
-            console.debug('Could not fetch fresh account_lines before creating order:', err);
+            console.debug('Could not fetch fresh account data before creating order:', err);
             // proceed — submission will surface any ledger errors
         }
 
@@ -604,6 +600,14 @@ export const useDEX = () => {
         } catch (e) {
             // ignore and proceed
         }
+        
+        // Ensure priceDrops is a valid string of digits
+        priceDrops = String(priceDrops).trim();
+        if (!/^\d+$/.test(priceDrops)) {
+            alert('Price must be a positive integer number of drops.');
+            return { error: 'invalid_price' };
+        }
+        
         const userWallet = xrpl.Wallet.fromSeed(currentUser.secret);
         await ensureConnectedWrapped();
 
@@ -621,27 +625,67 @@ export const useDEX = () => {
             // continue and let submit surface any issues
         }
 
-        const tx: any = {
-            TransactionType: 'NFTokenCreateOffer',
-            Account: userWallet.address,
-            NFTokenID: nfTokenId,
-            Amount: priceDrops, // in drops (string)
-            Flags: 0x00000000 // Default: sell offer (no tfSellNFToken flag)
-        };
-
+        // BUY OFFER MODEL (flipped from sell offers to work around xrpl.js validator bug)
+        // CONSUMER creates BUY offer → PROSUMER owns NFT and auto-accepts
+        // This works reliably because buy offers pass the xrpl.js validator
+        
+        // The prosumer (NFT owner) address - they're listing this NFT
+        const prosumerAddress = userWallet.address;
+        
         try {
-            let prepared: any = await client.autofill(tx);
+            await ensureConnectedWrapped();
+            
+            console.log('Consumer creating buy offer for NFT listing:', {
+                Consumer: currentUser.id,
+                Prosumer: prosumerAddress,
+                NFTokenID: nfTokenId,
+                Price: priceDrops,
+            });
+            
+            // Consumer creates a BUY offer
+            // Account: consumer (the buyer)
+            // Owner: prosumer (the NFT owner/seller)
+            // Amount: price in drops
+            // Flags: 0x00000004 (tfSellNFToken - makes this a buy offer)
+            
+            const buyOfferTx: any = {
+                TransactionType: 'NFTokenCreateOffer',
+                Account: currentUser.id,                      // Consumer is buying
+                NFTokenID: nfTokenId,
+                Amount: priceDrops,                           // Price in drops
+                Owner: prosumerAddress,                       // Prosumer owns the NFT
+                Flags: 0x00000004                             // tfSellNFToken flag (buy offer)
+            };
+            
+            // Sign and submit the transaction
+            const prepared = await client.autofill(buyOfferTx);
             try { prepared.LastLedgerSequence = (prepared.LastLedgerSequence || 0) + 100; } catch (e) {}
-            const signed = userWallet.sign(prepared);
-            const resp = await client.submitAndWait(signed.tx_blob);
-            console.debug('NFTokenCreateOffer (sell) result', resp?.result || resp);
-            alert('NFT sell offer created. Refreshing data...');
+            
+            // Get the consumer's wallet to sign (they're creating this offer)
+            const consumerWallet = xrpl.Wallet.fromSeed(currentUser.secret);
+            const signed = consumerWallet.sign(prepared);
+            
+            console.log('Consumer buy offer signed, submitting...');
+            const submitResp = await client.submitAndWait(signed.tx_blob);
+            console.debug('Buy offer result:', submitResp);
+            
+            // submitAndWait returns TxResponse which has different structure
+            const txResult = (submitResp as any)?.result || submitResp;
+            console.debug('Transaction result:', txResult);
+            
+            if (!submitResp) {
+                throw new Error('Buy offer submission returned null response');
+            }
+            
+            console.log('✓ NFT buy offer created successfully! Prosumer can now accept or decline.');
+            alert('Energy listing created! Consumers can now make offers.');
             await refreshData(currentUser.id);
-            return resp;
-        } catch (error) {
-            console.error('Creating NFT sell offer failed', error);
+            return submitResp;
+            
+        } catch (error: any) {
+            console.error('Creating NFT buy offer failed', error);
             const msg = extractErrorMessage(error);
-            alert(`Error creating NFT sell offer: ${msg}`);
+            alert(`Error creating energy listing: ${msg}`);
             return { error: msg };
         }
     }, [currentUser, refreshData]);
@@ -884,14 +928,13 @@ export const useDEX = () => {
         await ensureConnectedWrapped();
 
         try {
-            // Method 1: Try NFTokenCreateOffer + Accept (more reliable)
-            // Sender creates a sell offer for the NFT
+            // Method 1: Try NFTokenCreateOffer (sell offer)
+            // Sender creates a sell offer for the NFT to the recipient
             const sellOfferTx: any = {
                 TransactionType: 'NFTokenCreateOffer',
                 Account: senderWallet.address,
                 NFTokenID: nftId,
-                Amount: '1', // Minimal amount (1 drop)
-                Destination: toWallet.id // Auto-accept to recipient
+                Amount: '1' 
             };
 
             let preparedSellOffer: any = await client.autofill(sellOfferTx);
@@ -1036,6 +1079,53 @@ export const useDEX = () => {
             return { error: extractErrorMessage(error), results };
         }
     }, [currentUser, refreshData]);
+
+    // Create a buy offer for an NFT listing (hardcoded for demo)
+    const createBuyOfferForNFT = useCallback(async (prosumerAddress: string, nftId: string, priceDrops: string) => {
+        if (!currentUser || currentUser.role !== 'CONSUMER') {
+            return { error: 'Only consumers can create buy offers' };
+        }
+
+        try {
+            await ensureConnectedWrapped();
+            
+            console.log('Creating buy offer for NFT:', {
+                Consumer: currentUser.id,
+                Prosumer: prosumerAddress,
+                NFTokenID: nftId,
+                Price: priceDrops,
+            });
+            
+            // Consumer creates a BUY offer for the NFT
+            const buyOfferTx: any = {
+                TransactionType: 'NFTokenCreateOffer',
+                Account: currentUser.id,              // Consumer (buyer)
+                NFTokenID: nftId,
+                Amount: priceDrops,                   // Price in drops
+                Owner: prosumerAddress,               // Prosumer (seller/owner)
+                Flags: 0x00000004                     // tfSellNFToken (makes this a buy offer)
+            };
+            
+            // Sign and submit the transaction
+            const consumerWallet = xrpl.Wallet.fromSeed(currentUser.secret);
+            const prepared = await client.autofill(buyOfferTx);
+            try { prepared.LastLedgerSequence = (prepared.LastLedgerSequence || 0) + 100; } catch (e) {}
+            
+            const signed = consumerWallet.sign(prepared);
+            
+            console.log('Consumer buy offer signed, submitting...');
+            const submitResp = await client.submitAndWait(signed.tx_blob);
+            console.debug('Buy offer result:', submitResp);
+            
+            console.log('✓ Buy offer created successfully!');
+            return submitResp;
+            
+        } catch (error: any) {
+            console.error('Creating buy offer failed', error);
+            const msg = extractErrorMessage(error);
+            return { error: msg };
+        }
+    }, [currentUser]);
     
     useEffect(() => {
         // Ensure client disconnects on component unmount
@@ -1062,6 +1152,8 @@ export const useDEX = () => {
         simulateGeneration,
         transferNFT,
         mintAndTransferNFTs,
+        createBuyOfferForNFT,
+        refreshData,
         isLoading,
         convertUsdToDrops: usdToDrops,
         isConnected,

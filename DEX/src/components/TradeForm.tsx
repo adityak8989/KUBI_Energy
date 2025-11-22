@@ -94,10 +94,19 @@ const TradeForm: React.FC<TradeFormProps> = ({ dex }) => {
       <form onSubmit={handleSubmit} className="space-y-6">
         <div>
           <h3 className="text-xl font-bold text-dex-gray-800 mb-2">
-            {isProsumer ? 'Create Sell Offer' : 'Create Buy Bid'}
+            {isProsumer ? 'List Energy NFT' : 'Make Purchase Offer'}
           </h3>
           <p className="text-sm text-dex-gray-600">
             {isProsumer 
+              ? 'List your Energy NFT for consumers to make offers on'
+              : 'Make an offer to purchase energy from prosumers'
+            }
+          </p>
+        </div>
+        
+        <div>
+          <p className="text-sm text-dex-gray-600">
+            {isProsumer
               ? `You have ${acceptedMpts} Energy Token${acceptedMpts !== 1 ? 's' : ''} available to sell`
               : `Your USD Balance: $${balances.usd.toFixed(2)}`
             }

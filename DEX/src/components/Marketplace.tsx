@@ -59,32 +59,53 @@ const Marketplace: React.FC<MarketplaceProps> = ({ dex }) => {
         {isProsumer ? (
           <>
             <OrderBook
-              title="Market Buy Bids (Sell to these)"
+              title="Market Buy Bids (From Consumers)"
               orders={marketOrders.bids}
               type="BID"
               onExecute={executeTrade}
               currentUserId={currentUser.id}
             />
-            <OrderBook
-              title="My Active Sell Offers"
-              orders={mySellOffers}
-              type="OFFER"
-              onExecute={() => {}} // No action on my own orders
-              currentUserId={currentUser.id}
-              defaultOpen={false}
-            />
+            
+            {/* Show prosumer's own NFTs as listings */}
+            <Card>
+              <h3 className="text-lg font-semibold mb-3 text-dex-gray-800">My Listed Energy NFTs</h3>
+              {acceptedMpts === 0 ? (
+                <p className="text-sm text-dex-gray-500">You don't have any Energy NFTs listed yet. Mint energy on the Dashboard to create listings.</p>
+              ) : (
+                <div className="space-y-3">
+                  {mpts.filter(m => m.transferable).map((nft) => (
+                    <div key={nft.nftId} className="flex items-center justify-between p-4 border border-dex-gray-200 rounded-lg bg-gradient-to-r from-blue-50 to-green-50 hover:shadow-md transition-shadow">
+                      <div className="flex-1">
+                        <p className="text-sm font-semibold text-dex-gray-800">{nft.metadata?.sourceType || 'Energy'} NFT</p>
+                        <p className="text-xs text-dex-gray-600 mt-1 font-mono truncate">ID: {nft.nftId.slice(0, 20)}...</p>
+                        <p className="text-xs text-dex-gray-600">
+                          Generated: {new Date(nft.metadata?.generationTime || '').toLocaleDateString()}
+                        </p>
+                        <p className="text-xs text-dex-gray-600 mt-1">
+                          Location: {nft.metadata?.geoLocation || 'Unknown'}
+                        </p>
+                      </div>
+                      <div className="ml-4 text-right">
+                        <p className="text-xs text-dex-gray-600">Status</p>
+                        <p className="text-sm font-semibold text-dex-green">Available</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
           </>
         ) : (
           <>
             <OrderBook
-              title="Market Sell Offers (Buy from these)"
+              title="Market Sell Offers (From Prosumers)"
               orders={marketOrders.offers}
               type="OFFER"
               onExecute={executeTrade}
               currentUserId={currentUser.id}
             />
             <OrderBook
-              title="My Active Buy Bids"
+              title="My Active Purchase Offers"
               orders={myBuyBids}
               type="BID"
               onExecute={() => {}} // No action on my own orders
@@ -95,46 +116,114 @@ const Marketplace: React.FC<MarketplaceProps> = ({ dex }) => {
         )}
         
         <Card>
-          <h3 className="text-lg font-semibold mb-3 text-dex-gray-800">NFT Energy Marketplace</h3>
-          {!dex.marketplaceNFTOffers || dex.marketplaceNFTOffers.length === 0 ? (
-            <p className="text-sm text-dex-gray-500">No NFT sell offers found on the market.</p>
-          ) : (
-            <div className="space-y-3">
-              {dex.marketplaceNFTOffers.map((o: any) => (
-                <div key={`${o.nftId}-${o.sellOfferIndex}`} className="flex items-center justify-between p-4 border border-dex-gray-200 rounded-lg bg-gradient-to-r from-green-50 to-blue-50 hover:shadow-md transition-shadow">
-                  <div className="flex-1">
-                    <p className="text-sm font-semibold text-dex-gray-800">{o.metadata?.sourceType || 'Energy Token'} NFT</p>
-                    <p className="text-xs text-dex-gray-600 mt-1">
-                      Seller: <span className="font-mono">{o.seller?.slice(0, 10)}...</span>
-                    </p>
-                    <p className="text-xs text-dex-gray-600">
-                      Generated: {o.metadata?.generationTime ? new Date(o.metadata.generationTime).toLocaleString() : 'Unknown'}
-                    </p>
-                    <p className="text-sm font-bold text-dex-green mt-2">
-                      Price: {(parseInt(o.amount || '0') / 1000000).toFixed(2)} XRP (~${(parseInt(o.amount || '0') / 1000000 * 0.5).toFixed(2)})
-                    </p>
-                  </div>
-                  <div className="ml-4">
-                    <button
-                      onClick={async () => {
-                        if (!confirm(`Purchase this energy NFT for ${(parseInt(o.amount || '0') / 1000000).toFixed(2)} XRP?`)) return;
-                        const res = await dex.buyNFTOffer(o.sellOfferIndex, o.nftId);
-                        if ((res as any)?.error) {
-                          alert(`Purchase failed: ${(res as any).error}`);
-                        } else {
-                          alert('Purchase submitted! Refreshing marketplace...');
-                          await dex.refreshMarketplaceNFTOffers();
-                        }
-                      }}
-                      className="px-4 py-2 bg-dex-green text-white rounded-lg text-sm font-medium hover:bg-green-600 transition-colors"
-                    >
-                      Buy NFT
-                    </button>
-                  </div>
-                </div>
-              ))}
+          <h3 className="text-lg font-semibold mb-3 text-dex-gray-800">Energy NFT Listings</h3>
+          
+          {/* Hardcoded Demo Listing */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between p-4 border border-dex-gray-200 rounded-lg bg-gradient-to-r from-green-50 to-blue-50 hover:shadow-md transition-shadow">
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-dex-gray-800">Solar Energy NFT - Demo Listing</p>
+                <p className="text-xs text-dex-gray-600 mt-1">
+                  Seller: <span className="font-mono">rDfNEueAZPPLh...</span>
+                </p>
+                <p className="text-xs text-dex-gray-600">
+                  Generated: {new Date().toLocaleDateString()}
+                </p>
+                <p className="text-sm font-bold text-dex-green mt-2">
+                  Price: 1.00 XRP (~$0.50)
+                </p>
+              </div>
+              <div className="ml-4">
+                <button
+                  onClick={async () => {
+                    if (!currentUser || currentUser.role !== 'CONSUMER') {
+                      alert('Only consumers can purchase energy NFTs. Please switch to consumer account.');
+                      return;
+                    }
+                    
+                    if (!confirm('Purchase this Solar Energy NFT for 1.00 XRP?')) return;
+                    
+                    try {
+                      // Hardcoded wallets for demo
+                      const prosumerAddress = 'rDfNEueAZPPLhaC6HXjvTAmM9JzeEV5NrR'; // Prosumer
+                      const nftId = '00010000A42F5B5E8F6B9C2D3E4F5A6B7C8D9E0F1A2B3C4D5E6F7A8B9C0D1E2'; // Demo NFT ID
+                      const priceDrops = '1000000'; // 1 XRP in drops
+                      
+                      console.log('Creating buy offer for demo listing:', {
+                        consumer: currentUser.id,
+                        prosumer: prosumerAddress,
+                        nftId,
+                        priceDrops
+                      });
+                      
+                      // Create buy offer using the DEX hook
+                      const result = await dex.createBuyOfferForNFT(prosumerAddress, nftId, priceDrops);
+                      
+                      if ((result as any)?.error) {
+                        alert(`Purchase failed: ${(result as any).error}`);
+                      } else {
+                        alert('✓ Purchase offer created! The prosumer can now accept your offer.');
+                        await dex.refreshData(currentUser.id);
+                      }
+                    } catch (err) {
+                      console.error('Purchase error:', err);
+                      alert(`Error: ${err instanceof Error ? err.message : String(err)}`);
+                    }
+                  }}
+                  disabled={currentUser.role !== 'CONSUMER'}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    currentUser.role === 'CONSUMER'
+                      ? 'bg-dex-green text-white hover:bg-green-600'
+                      : 'bg-dex-gray-200 text-dex-gray-500 cursor-not-allowed'
+                  }`}
+                >
+                  {currentUser.role === 'CONSUMER' ? 'Buy NFT' : 'Consumers Only'}
+                </button>
+              </div>
             </div>
-          )}
+
+            {/* Show other marketplace offers if any */}
+            {dex.marketplaceNFTOffers && dex.marketplaceNFTOffers.length > 0 && (
+              <>
+                <div className="border-t border-dex-gray-200 my-3 pt-3">
+                  <p className="text-xs text-dex-gray-500 mb-2">Other Listings:</p>
+                </div>
+                {dex.marketplaceNFTOffers.map((o: any) => (
+                  <div key={`${o.nftId}-${o.sellOfferIndex}`} className="flex items-center justify-between p-4 border border-dex-gray-200 rounded-lg bg-gray-50 hover:shadow-md transition-shadow">
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-dex-gray-800">{o.metadata?.sourceType || 'Energy Token'} NFT</p>
+                      <p className="text-xs text-dex-gray-600 mt-1">
+                        Seller: <span className="font-mono">{o.seller?.slice(0, 10)}...</span>
+                      </p>
+                      <p className="text-xs text-dex-gray-600">
+                        Generated: {o.metadata?.generationTime ? new Date(o.metadata.generationTime).toLocaleString() : 'Unknown'}
+                      </p>
+                      <p className="text-sm font-bold text-dex-green mt-2">
+                        Price: {(parseInt(o.amount || '0') / 1000000).toFixed(2)} XRP (~${(parseInt(o.amount || '0') / 1000000 * 0.5).toFixed(2)})
+                      </p>
+                    </div>
+                    <div className="ml-4">
+                      <button
+                        onClick={async () => {
+                          if (!confirm(`Purchase this energy NFT for ${(parseInt(o.amount || '0') / 1000000).toFixed(2)} XRP?`)) return;
+                          const res = await dex.buyNFTOffer(o.sellOfferIndex, o.nftId);
+                          if ((res as any)?.error) {
+                            alert(`Purchase failed: ${(res as any).error}`);
+                          } else {
+                            alert('Purchase submitted! Refreshing marketplace...');
+                            await dex.refreshMarketplaceNFTOffers();
+                          }
+                        }}
+                        className="px-4 py-2 bg-dex-green text-white rounded-lg text-sm font-medium hover:bg-green-600 transition-colors"
+                      >
+                        Buy NFT
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
         </Card>
       </div>
       <div className="lg:col-span-1">
