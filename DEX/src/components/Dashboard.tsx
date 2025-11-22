@@ -30,9 +30,12 @@ const mockChartData = [
 ];
 
 const Dashboard: React.FC<DashboardProps> = ({ dex, setCurrentView }) => {
-  const { currentUser, balances, simulateGeneration, mpts, isLoading } = dex;
+  const { currentUser, balances, simulateGeneration, mpts, isLoading, users, transferNFT, mintAndTransferNFTs } = dex;
   const [generationAmount, setGenerationAmount] = useState('10');
   const [isMinting, setIsMinting] = useState(false);
+  const [transferMode, setTransferMode] = useState<'none' | 'to-prosumer' | 'to-consumer'>('none');
+  const [transferCount, setTransferCount] = useState('1');
+  const [isTransferring, setIsTransferring] = useState(false);
 
   const acceptedMpts = mpts.filter(m => m.accepted && m.transferable).length;
 
@@ -55,6 +58,58 @@ const Dashboard: React.FC<DashboardProps> = ({ dex, setCurrentView }) => {
       }
     } else {
       alert('Please enter a valid amount.');
+    }
+  };
+
+  const handleBatchTransfer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    // If no mode selected, mint and transfer to current user
+    let targetUser = currentUser;
+    
+    if (transferMode !== 'none') {
+      // If a specific destination is selected, use that instead
+      targetUser = transferMode === 'to-prosumer'
+        ? users.find(u => u.role === 'PROSUMER')
+        : users.find(u => u.role === 'CONSUMER');
+
+      if (!targetUser) {
+        alert(`No ${transferMode === 'to-prosumer' ? 'Prosumer' : 'Consumer'} user found.`);
+        return;
+      }
+    }
+
+    const count = parseInt(transferCount, 10);
+    if (isNaN(count) || count <= 0 || count > 10) {
+      alert('Please enter a valid count (1-10).');
+      return;
+    }
+
+    setIsTransferring(true);
+    try {
+      const metadata = {
+        sourceType: 'Solar_PV' as const,
+        generationTime: new Date().toISOString(),
+        certificateId: `CERT-${Date.now()}`,
+        geoLocation: 'Grid_Zone_007',
+      };
+
+      console.log(`Starting batch transfer: ${count} NFTs to ${targetUser.name} (${targetUser.id})`);
+      const result = await mintAndTransferNFTs(count, targetUser, metadata);
+      
+      if ((result as any).error) {
+        alert(`Transfer failed: ${(result as any).error}`);
+      } else {
+        const completed = (result as any).completed || 0;
+        alert(`Successfully transferred ${completed}/${count} NFTs to ${targetUser.name}`);
+        setTransferMode('none');
+        setTransferCount('1');
+      }
+    } catch (error) {
+      console.error('Batch transfer error:', error);
+      alert(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsTransferring(false);
     }
   };
 
@@ -181,6 +236,66 @@ const Dashboard: React.FC<DashboardProps> = ({ dex, setCurrentView }) => {
               
               <p className="text-xs text-dex-gray-500 mt-4 p-3 bg-dex-gray-50 rounded">
                 💡 Each NFT represents 1 kWh of certified renewable energy with metadata including source, generation time, and location.
+              </p>
+            </Card>
+
+            {/* NFT Batch Transfer Section */}
+            <Card>
+              <h3 className="text-lg font-bold mb-4 text-dex-gray-800">🚀 Batch Mint & Transfer NFTs</h3>
+              <p className="text-sm text-dex-gray-600 mb-6">
+                Quickly mint multiple Energy Tokens and transfer them to another wallet. Perfect for testing the energy trading flow.
+              </p>
+              
+              <form onSubmit={handleBatchTransfer} className="space-y-4">
+                <div>
+                  <label htmlFor="transfer-destination" className="block text-sm font-medium text-dex-gray-700 mb-1">
+                    Transfer To
+                  </label>
+                  <select
+                    id="transfer-destination"
+                    value={transferMode}
+                    onChange={(e) => setTransferMode(e.target.value as any)}
+                    disabled={isTransferring || isLoading}
+                    className="w-full px-4 py-2 border border-dex-gray-300 rounded-md focus:ring-dex-blue focus:border-dex-blue bg-dex-gray-50 text-dex-blue disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <option value="none">-- Select Destination --</option>
+                    <option value="to-prosumer">Prosumer Wallet</option>
+                    <option value="to-consumer">Consumer Wallet</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="transfer-count" className="block text-sm font-medium text-dex-gray-700 mb-1">
+                    Number of NFTs to Create & Transfer
+                  </label>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      id="transfer-count"
+                      type="number"
+                      value={transferCount}
+                      onChange={(e) => setTransferCount(e.target.value)}
+                      disabled={isTransferring || isLoading}
+                      min="1"
+                      max="10"
+                      step="1"
+                      className="flex-1 px-4 py-2 border border-dex-gray-300 rounded-md focus:ring-dex-blue focus:border-dex-blue bg-dex-gray-50 text-dex-blue placeholder:text-dex-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                      placeholder="1"
+                    />
+                    <span className="text-dex-gray-600 font-medium">NFTs</span>
+                  </div>
+                </div>
+
+                <button 
+                  type="submit" 
+                  disabled={isTransferring || isLoading || transferMode === 'none' || !transferCount || parseInt(transferCount, 10) <= 0}
+                  className="w-full flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-dex-blue hover:bg-blue-800 disabled:bg-blue-300 disabled:cursor-not-allowed transition-colors"
+                >
+                  {isTransferring || isLoading ? 'Transferring...' : '🔄 Mint & Transfer'}
+                </button>
+              </form>
+
+              <p className="text-xs text-dex-gray-500 mt-4 p-3 bg-blue-50 rounded border border-blue-100">
+                ✨ This creates new Energy Tokens directly to the selected wallet. Each transfer includes full metadata (source type, generation time, location).
               </p>
             </Card>
           </>

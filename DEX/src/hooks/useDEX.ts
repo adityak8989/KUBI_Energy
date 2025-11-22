@@ -368,7 +368,6 @@ export const useDEX = () => {
         try {
             setIsLoading(true);
             const userWallet = xrpl.Wallet.fromSeed(secret);
-            // Try to find a demo user by address; if not found, create a minimal user record.
             let user = initialUsers.find(u => u.id === userWallet.address);
             if (!user) {
                 user = {
@@ -379,7 +378,6 @@ export const useDEX = () => {
                     secret
                 } as User;
             } else {
-                // ensure secret is set on the returned user for demo purposes
                 (user as any).secret = secret;
             }
 
@@ -433,6 +431,9 @@ export const useDEX = () => {
         const userWallet = xrpl.Wallet.fromSeed(currentUser.secret);
         await ensureConnectedWrapped();
 
+        // Refresh data to get latest MPTs and balances
+        await refreshData(userWallet.address);
+
         // Fetch freshest balances for the account to avoid creating unfunded offers
         try {
             const acctLines = await client.request({ command: 'account_lines', account: userWallet.address });
@@ -467,7 +468,7 @@ export const useDEX = () => {
                         priceDrops = raw;
                     }
 
-                    // Create sell offers for the first `needed` MPTs
+                    // Create sell offers for the first `needed` MPTs (no balance required for NFT sales)
                     for (let i = 0; i < needed; i++) {
                         const nft = mpts[i];
                         if (!nft) continue;
@@ -477,11 +478,10 @@ export const useDEX = () => {
                     return;
                 }
 
-                // Selling ET fungible path: ensure user has enough ET to cover the offer amount
-                if (etBal < amount) {
-                    alert(`Insufficient ${ET_CURRENCY_CODE} balance (${etBal}). Cannot create sell offer for ${amount}.`);
-                    return;
-                }
+                // If no NFTs owned, cannot create sell offer (only NFTs can be sold for free)
+                alert('You do not own any NFTs to sell. Generate energy first to create sell offers.');
+                return;
+
             } else if (type === 'BID') {
                 // Buying ET: ensure user has enough USD to cover amount * price
                 const required = amount * price;
@@ -625,7 +625,8 @@ export const useDEX = () => {
             TransactionType: 'NFTokenCreateOffer',
             Account: userWallet.address,
             NFTokenID: nfTokenId,
-            Amount: priceDrops // in drops (string)
+            Amount: priceDrops, // in drops (string)
+            Flags: 0x00000000 // Default: sell offer (no tfSellNFToken flag)
         };
 
         try {
@@ -795,21 +796,26 @@ export const useDEX = () => {
                 return { mintRes, transferred: true };
             }
             
-            // Fallback: Use buy/sell offer mechanism
-            console.log('Falling back to buy/sell offer mechanism...');
+            // Tier 2 Fallback: Issuer creates buy offer (auto-executes, no Prosumer action needed)
+            console.log('Issuer creating buy offer for NFT (auto-executing transfer)...');
             try {
-                // Create a buy offer from the recipient (minimal amount = 1 drop)
+                // Issuer creates a buy offer where they are the BUYER
+                // The Prosumer owns the NFT, and auto-accepts when issued by issuer
+                // This is more reliable than sell offers because no consumer action is required
+                console.log(`Issuer creating buy offer for NFT ${nfId}, to be owned by Prosumer ${recipientWallet.address}`);
+                
                 const buyOfferTx: any = {
                     TransactionType: 'NFTokenCreateOffer',
-                    Account: recipientWallet.address,
-                    Owner: issuerWallet.address,
+                    Account: issuerWallet.address,
                     NFTokenID: nfId,
-                    Amount: '1'
+                    Amount: '1',                              // Minimal amount in drops
+                    Owner: recipientWallet.address,           // Prosumer owns the NFT
+                    Flags: 0x00000004                         // tfSellNFToken flag (makes this a buy offer from issuer's perspective)
                 };
                 
                 let preparedBuyOffer: any = await client.autofill(buyOfferTx);
                 try { preparedBuyOffer.LastLedgerSequence = (preparedBuyOffer.LastLedgerSequence || 0) + 100; } catch (e) {}
-                const signedBuyOffer = recipientWallet.sign(preparedBuyOffer);
+                const signedBuyOffer = issuerWallet.sign(preparedBuyOffer);
                 
                 let buyOfferRes: any = null;
                 try {
@@ -820,65 +826,38 @@ export const useDEX = () => {
                     throw submitErr;
                 }
                 
-                // Extract the buy offer index
-                let buyOfferIndex: string | number | undefined = (buyOfferRes as any)?.result?.nft_offer_index || 
-                                                                   (buyOfferRes as any)?.result?.offer_index || 
-                                                                   (buyOfferRes as any)?.nft_offer_index || 
-                                                                   (buyOfferRes as any)?.result?.index;
+                // Parse response to check for success
+                let buyOfferEngine = '';
+                let buyOfferMessage = '';
                 
-                // If index not in response, poll for it
-                if (!buyOfferIndex) {
-                    const end = Date.now() + 30000;
-                    while (Date.now() < end && !buyOfferIndex) {
-                        try {
-                            await ensureConnectedWrapped();
-                            const probe = await client.request({ command: 'nft_buy_offers', nft_id: nfId });
-                            const offers = (probe as any).result?.offers || [];
-                            for (const o of offers) {
-                                const owner = String(o.owner || o.Account || o.account || '').toLowerCase();
-                                if (owner === String(recipientWallet.address).toLowerCase()) {
-                                    buyOfferIndex = o.nft_offer_index || o.index || o.offer_index || o.nft_offer_id;
-                                    break;
-                                }
-                            }
-                        } catch (e) {
-                            console.debug('Polling for buy offer index...', e?.message || '');
-                        }
-                        if (!buyOfferIndex) await new Promise(r => setTimeout(r, 1000));
-                    }
+                if (buyOfferRes?.result?.engine_result) {
+                    buyOfferEngine = buyOfferRes.result.engine_result;
+                    buyOfferMessage = buyOfferRes.result.engine_result_message || '';
+                } else if (buyOfferRes?.engine_result) {
+                    buyOfferEngine = buyOfferRes.engine_result;
+                    buyOfferMessage = buyOfferRes.engine_result_message || '';
                 }
                 
-                if (!buyOfferIndex) {
-                    throw new Error('Could not find buy offer index for NFT transfer');
+                console.debug('Buy offer engine result:', { buyOfferEngine, buyOfferMessage });
+                
+                if (!buyOfferRes) {
+                    throw new Error('Buy offer submission returned null response');
                 }
                 
-                // Issuer accepts the buy offer
-                const acceptTx: any = {
-                    TransactionType: 'NFTokenAcceptOffer',
-                    Account: issuerWallet.address,
-                    NFTokenBuyOffer: String(buyOfferIndex)
-                };
-                
-                let preparedAccept: any = await client.autofill(acceptTx);
-                try { preparedAccept.LastLedgerSequence = (preparedAccept.LastLedgerSequence || 0) + 100; } catch (e) {}
-                const signedAccept = issuerWallet.sign(preparedAccept);
-                
-                const acceptRes = await client.submitAndWait(signedAccept.tx_blob);
-                const acceptEngine = (acceptRes as any)?.result?.engine_result || (acceptRes as any)?.engine_result || '';
-                console.debug('Accept offer result:', { acceptEngine, acceptRes });
-                
-                if (!String(acceptEngine).startsWith('tes')) {
-                    throw new Error(`NFT transfer failed: ${acceptEngine}`);
+                if (buyOfferEngine && !String(buyOfferEngine).startsWith('tes')) {
+                    throw new Error(`NFT buy offer failed with engine result: ${buyOfferEngine}. Message: ${buyOfferMessage}`);
                 }
                 
-                console.log('✓ NFT transferred successfully via buy/sell offer');
+                console.log('✓ NFT transferred successfully via buy offer (issuer-controlled, no consumer action needed)');
+                await new Promise(r => setTimeout(r, 2000)); // Wait 2s for ledger to process
                 await refreshData(currentUser.id);
                 alert(`${amount} ET minted as NFT and transferred successfully!`);
-                return { mintRes, buyOfferRes, acceptRes, transferred: true };
+                return { mintRes, buyOfferRes, transferred: true };
                 
             } catch (fallbackErr) {
-                console.error('Buy/sell offer transfer failed:', fallbackErr);
-                throw fallbackErr;
+                console.error('Buy offer transfer mechanism failed:', fallbackErr);
+                const errMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+                throw new Error(`NFT transfer mechanism failed: ${errMsg}`);
             }
         } catch (error) {
             console.error('NFT minting/transfer failed:', error);
@@ -886,6 +865,175 @@ export const useDEX = () => {
             alert(`Error minting NFT MPT: ${msg}`);
             // return structured error so caller/UI can handle without crashing
             return { error: msg };
+        }
+    }, [currentUser, refreshData]);
+
+    // Transfer an NFT (MPT) from one wallet to another (requires issuer capability)
+    const transferNFT = useCallback(async (nftId: string, fromWallet: User, toWallet: User) => {
+        if (!currentUser) return { error: 'not_logged_in' };
+        
+        // Only issuer or current owner can initiate transfer
+        const issuerWallet = xrpl.Wallet.fromSeed(ISSUER_WALLET.secret);
+        const senderSecret = currentUser.id === ISSUER_WALLET.address ? ISSUER_WALLET.secret : (currentUser.role === 'PROSUMER' ? currentUser.secret : null);
+        
+        if (!senderSecret) {
+            return { error: 'insufficient_permissions' };
+        }
+
+        const senderWallet = xrpl.Wallet.fromSeed(senderSecret);
+        await ensureConnectedWrapped();
+
+        try {
+            // Method 1: Try NFTokenCreateOffer + Accept (more reliable)
+            // Sender creates a sell offer for the NFT
+            const sellOfferTx: any = {
+                TransactionType: 'NFTokenCreateOffer',
+                Account: senderWallet.address,
+                NFTokenID: nftId,
+                Amount: '1', // Minimal amount (1 drop)
+                Destination: toWallet.id // Auto-accept to recipient
+            };
+
+            let preparedSellOffer: any = await client.autofill(sellOfferTx);
+            try { preparedSellOffer.LastLedgerSequence = (preparedSellOffer.LastLedgerSequence || 0) + 100; } catch (e) {}
+            const signedSellOffer = senderWallet.sign(preparedSellOffer);
+
+            let sellOfferRes: any = null;
+            try {
+                sellOfferRes = await client.submitAndWait(signedSellOffer.tx_blob);
+                console.debug('NFT sell offer result:', sellOfferRes?.result || sellOfferRes);
+            } catch (submitErr) {
+                console.error('Sell offer submission failed', submitErr);
+                throw submitErr;
+            }
+
+            // Check for success
+            let sellOfferEngine = '';
+            if (sellOfferRes?.result?.engine_result) {
+                sellOfferEngine = sellOfferRes.result.engine_result;
+            } else if (sellOfferRes?.engine_result) {
+                sellOfferEngine = sellOfferRes.engine_result;
+            }
+
+            if (!sellOfferRes) {
+                throw new Error('Sell offer submission returned null response');
+            }
+
+            if (sellOfferEngine && !String(sellOfferEngine).startsWith('tes')) {
+                throw new Error(`NFT sell offer failed with engine result: ${sellOfferEngine}`);
+            }
+
+            console.log('✓ NFT transferred successfully via sell offer');
+            await new Promise(r => setTimeout(r, 2000)); // Wait for ledger
+            await refreshData(currentUser.id);
+            return { sellOfferRes, transferred: true };
+
+        } catch (error) {
+            console.error('NFT transfer failed:', error);
+            const msg = extractErrorMessage(error);
+            return { error: msg };
+        }
+    }, [currentUser, refreshData]);
+
+    // Batch mint and transfer NFTs to a specific wallet
+    const mintAndTransferNFTs = useCallback(async (count: number, toWalletUser?: User, metadata?: MPTMetadata) => {
+        if (!currentUser) return { error: 'not_logged_in' };
+
+        // Use currentUser as recipient if toWalletUser not provided
+        const recipientUser = toWalletUser || currentUser;
+        const issuerWallet = xrpl.Wallet.fromSeed(ISSUER_WALLET.secret);
+        const results: Array<{ nftId?: string; transferred: boolean; error?: string }> = [];
+
+        try {
+            await ensureConnectedWrapped();
+
+            for (let i = 0; i < count; i++) {
+                try {
+                    console.log(`Minting NFT ${i + 1}/${count} for transfer to ${recipientUser.name} (${recipientUser.id})...`);
+
+                    // 1) Mint NFToken
+                    const mintMetadata = metadata || {
+                        sourceType: 'Solar_PV' as const,
+                        generationTime: new Date().toISOString(),
+                        certificateId: `CERT-${Date.now()}-${i}`,
+                        geoLocation: 'Grid_Zone_007',
+                    };
+
+                    const mintTx: any = {
+                        TransactionType: 'NFTokenMint',
+                        Account: issuerWallet.address,
+                        NFTokenTaxon: 0,
+                        Flags: 0x00000008, // tfTransferable
+                        URI: stringToHex(JSON.stringify(mintMetadata))
+                    };
+
+                    let preparedMint: any = await client.autofill(mintTx);
+                    // Set LastLedgerSequence more conservatively: 50 ledgers from current
+                    const currentLedger = preparedMint.LastLedgerSequence || 0;
+                    preparedMint.LastLedgerSequence = currentLedger + 50;
+                    
+                    const signedMint = issuerWallet.sign(preparedMint);
+                    console.debug(`Submitting mint transaction with LastLedgerSequence: ${preparedMint.LastLedgerSequence}`);
+                    const mintRes = await client.submitAndWait(signedMint.tx_blob);
+                    console.debug(`NFTokenMint ${i + 1} result:`, mintRes?.result || mintRes);
+
+                    // 2) Wait for NFT to appear on issuer
+                    let newNft: any = null;
+                    const targetHex = stringToHex(JSON.stringify(mintMetadata)).replace(/^0x/, '');
+                    newNft = await waitForNftByUriHex(targetHex, issuerWallet.address, 20000, 1000);
+
+                    if (!newNft) {
+                        const issuerNftsRes = await client.request({ command: 'account_nfts', account: issuerWallet.address, limit: 200 });
+                        const nftList = (issuerNftsRes as any).result?.account_nfts || [];
+                        newNft = nftList[nftList.length - 1];
+                    }
+
+                    if (!newNft) {
+                        results.push({ transferred: false, error: 'Could not locate minted NFT' });
+                        continue;
+                    }
+
+                    const nftId = newNft.NFTokenID || (newNft as any).nft_id || '';
+                    console.log(`NFT minted: ${nftId}, now transferring to ${recipientUser.id}...`);
+
+                    // 3) Transfer to recipient wallet
+                    const transferTx: any = {
+                        TransactionType: 'NFTokenCreateOffer',
+                        Account: issuerWallet.address,
+                        NFTokenID: nftId,
+                        Amount: '1',
+                        Destination: recipientUser.id
+                    };
+
+                    let preparedTransfer: any = await client.autofill(transferTx);
+                    // Set LastLedgerSequence more conservatively: 50 ledgers from current
+                    const transferCurrentLedger = preparedTransfer.LastLedgerSequence || 0;
+                    preparedTransfer.LastLedgerSequence = transferCurrentLedger + 50;
+                    
+                    const signedTransfer = issuerWallet.sign(preparedTransfer);
+                    console.debug(`Submitting transfer transaction with LastLedgerSequence: ${preparedTransfer.LastLedgerSequence}`);
+                    const transferRes = await client.submitAndWait(signedTransfer.tx_blob);
+                    console.debug(`NFT transfer ${i + 1} result:`, transferRes?.result || transferRes);
+
+                    results.push({ nftId, transferred: true });
+                    console.log(`NFT ${i + 1}/${count} successfully transferred. Waiting before next mint...`);
+                    await new Promise(r => setTimeout(r, 2000)); // Increased delay between transfers to 2 seconds
+
+                } catch (err) {
+                    console.error(`NFT ${i + 1} mint/transfer failed:`, err);
+                    results.push({ transferred: false, error: extractErrorMessage(err) });
+                }
+            }
+
+            // Refresh data for both parties
+            await refreshData(issuerWallet.address);
+            await refreshData(recipientUser.id);
+
+            return { results, completed: results.filter(r => r.transferred).length };
+
+        } catch (error) {
+            console.error('Batch mint/transfer failed:', error);
+            return { error: extractErrorMessage(error), results };
         }
     }, [currentUser, refreshData]);
     
@@ -912,6 +1060,8 @@ export const useDEX = () => {
         createOrder,
         executeTrade,
         simulateGeneration,
+        transferNFT,
+        mintAndTransferNFTs,
         isLoading,
         convertUsdToDrops: usdToDrops,
         isConnected,
